@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brew"
+version = "0.1.0"
+description = "A Lightweight Framework for Digital Agent Evaluation and Training"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.23",
+  "pydantic>=2.0",
+  "PyYAML>=6.0",
+  "omegaconf>=2.3",
+  "ray>=2.49",
+  "httpx>=0.25",
+  "modal",
+  "psutil>=5.9",
+  "wandb>=0.17",
+  "jinja2",
+  "litellm",
+  "datasets",
+  "docker",
+  "unidiff",
+  "ghapi>=1.0.10",
+]
+
+
+[tool.setuptools.packages.find]
+where = ["brew"]
