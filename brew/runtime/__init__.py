@@ -1,3 +1,0 @@
-"""
-Runtime components for TinyAgentServer.
-"""
