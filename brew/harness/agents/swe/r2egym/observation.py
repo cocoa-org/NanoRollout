@@ -2,7 +2,8 @@
 Observation formatting  (stolen from r2egym/agenthub/observation/observation.py)
 """
 
-from brew.harness.agents.prompts.swe.r2egym import CONTINUE_MSG
+from .prompts import CONTINUE_MSG
+
 _OBS_TRUNCATE_LINES = 40
 _MAX_OBS_CHARS = 20000
 

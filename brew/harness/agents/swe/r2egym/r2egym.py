@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm import token_counter
 
-from brew.harness.agents.prompts.swe.r2egym import (
+from .prompts import (
     CONTINUE_MSG,
     FN_CALLING_SYSTEM_PROMPT,
     INSTANCE_PROMPT,
@@ -23,7 +23,7 @@ from .action import _parse_xml_action, _action_to_xml, _action_to_bashcmd
 from .observation import _format_observation
 
 if TYPE_CHECKING:
-    from brew.envs.base import BaseEnvironment
+    from brew.envs.shell_env.base import ShellEnvironment as BaseEnvironment
     from brew.harness.tools.base import BaseTool
 
 logger = logging.getLogger(__name__)

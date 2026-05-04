@@ -13,6 +13,5 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 11000
     concurrency: int = 256
-    max_pending_jobs: int = 0
     output_dir: str = "./results"
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)

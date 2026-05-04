@@ -8,7 +8,7 @@ from litellm import completion, token_counter
 from litellm import completion_cost
 
 if TYPE_CHECKING:
-    from brew.envs.base import BaseEnvironment
+    from brew.envs.shell_env.base import ShellEnvironment as BaseEnvironment
     from brew.harness.tools.base import BaseTool
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 if TYPE_CHECKING:
-    from brew.envs.base import BaseEnvironment
+    from brew.envs.shell_env.base import ShellEnvironment as BaseEnvironment
 
 
 @dataclass

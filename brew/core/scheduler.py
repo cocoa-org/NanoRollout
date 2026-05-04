@@ -1,8 +1,6 @@
 import atexit
 import asyncio
 import gc
-import importlib
-import json
 import os
 import threading
 import traceback
@@ -11,19 +9,14 @@ from typing import Any
 
 from brew.core.config import SchedulerConfig
 from brew.core.models import ResourceRequest, RunRequest
+from brew.core.runners import (
+    build_runner_params,
+    load_runner_callable,
+    resolve_request_runner,
+)
 
 import ray
 from ray.exceptions import GetTimeoutError, TaskCancelledError
-
-
-DEFAULT_RUNNERS: dict[str, tuple[str, str]] = {
-    "minisweagent": ("brew.harness.runner.miniswe", "run_miniswe"),
-    "oh-core": ("brew.harness.runner.oh_core", "run_oh_core"),
-    "openhands": ("brew.harness.runner.oh_core", "run_oh_core"),
-    "oh-lite": ("brew.harness.runner.oh_lite", "run_oh_lite"),
-    "r2egym": ("brew.harness.runner.r2egym", "run_r2egym"),
-    "r2e-gym": ("brew.harness.runner.r2egym", "run_r2egym"),
-}
 
 
 class SchedulerTimeoutError(TimeoutError):
@@ -58,22 +51,19 @@ class Scheduler:
             )
             self._initialized = True
 
-    def warmup(self) -> None:
-        self._ensure_init()
-
     async def run(
         self,
         request: RunRequest,
         output_dir: str,
     ) -> dict[str, Any]:
-        module_name, entrypoint = self._resolve_runner(request.runner)
-        params = self._build_params(request, output_dir)
+        spec = resolve_request_runner(request)
+        params = build_runner_params(request, output_dir)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor,
             self._run_blocking,
-            module_name,
-            entrypoint,
+            spec.module,
+            spec.entrypoint,
             params,
             request.resources,
             request.task_timeout_s,
@@ -147,37 +137,6 @@ class Scheduler:
             opts["memory"] = int(memory_gb * 1024**3)
         return opts
 
-    def _resolve_runner(self, runner: str) -> tuple[str, str]:
-        runner_name = runner.strip().lower()
-        try:
-            return DEFAULT_RUNNERS[runner_name]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported runner type: {runner_name}") from exc
-
-    @staticmethod
-    def _build_params(request: RunRequest, output_dir: str) -> dict[str, Any]:
-        return {
-            "instance_id": request.instance_id,
-            "model_name": request.model_name,
-            "base_url": request.base_url,
-            "api_key": request.api_key,
-            "env_type": request.env_type,
-            "sampling_params": json.dumps(request.sampling_params or {}),
-            "output_dir": output_dir,
-            "extra_args": request.extra_args,
-        }
-
-
-def _load_runner_callable(module_name: str, entrypoint: str):
-    module = importlib.import_module(module_name)
-    try:
-        return getattr(module, entrypoint)
-    except AttributeError as exc:
-        raise ImportError(
-            f"Runner entrypoint {entrypoint!r} not found in module {module_name!r}"
-        ) from exc
-
-
 _MAX_CALLS_PER_WORKER = 50
 
 
@@ -185,7 +144,7 @@ def _build_worker():
     @ray.remote(max_calls=_MAX_CALLS_PER_WORKER)
     def _ray_worker(payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            runner = _load_runner_callable(
+            runner = load_runner_callable(
                 payload["module_name"],
                 payload["entrypoint"],
             )

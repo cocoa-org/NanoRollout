@@ -1,0 +1,1 @@
+"""Desktop GUI environment implementation."""

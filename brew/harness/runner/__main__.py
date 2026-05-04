@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 
-from brew.harness.runner.oh_core import run_oh_core
+from brew.harness.runner.swe.oh_core import run_oh_core
 
 
 def _setup_logging(verbose: bool) -> None:

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "brew"
 version = "0.1.0"
-description = "A Lightweight Framework for Digital Agent Evaluation and Training"
+description = "Easy agent rollout at scale"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,7 +25,12 @@ dependencies = [
   "docker",
   "unidiff",
   "ghapi>=1.0.10",
+  "rich",
 ]
+
+
+[project.scripts]
+tbrew = "brew.cli:main"
 
 
 [tool.setuptools.packages.find]

@@ -21,7 +21,9 @@ class RunRequest(BaseModel):
     api_key: str | None = None
     env_type: str | None = None
     sampling_params: dict[str, Any] | None = None
-    runner: str = "oh-core"
+    task: str = "swe"
+    agent: str = "oh-core"
+    runner: str | None = None
     resources: ResourceRequest = Field(default_factory=ResourceRequest)
     extra_args: dict[str, Any] | None = None
 
