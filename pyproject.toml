@@ -25,6 +25,7 @@ dependencies = [
   "docker",
   "unidiff",
   "ghapi>=1.0.10",
+  "rich",
 ]
 
 

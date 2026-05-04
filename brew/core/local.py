@@ -1,12 +1,15 @@
 import json
 import logging
 import multiprocessing as mp
+import os
 import queue
+import sys
 import time
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 from uuid import uuid4
 
 from brew.core.models import RunRequest, RunResponse
@@ -86,8 +89,39 @@ def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": str(exc), "traceback": traceback.format_exc()}
 
 
+@contextmanager
+def _suppress_child_console() -> Iterator[None]:
+    """Keep noisy task process output out of the parent console."""
+    # TODO(Junli): Handle subprocess logging
+    previous_stdout = sys.stdout
+    previous_stderr = sys.stderr
+    root = logging.getLogger()
+    previous_handlers = list(root.handlers)
+    previous_level = root.level
+
+    with open(os.devnull, "w", encoding="utf-8") as handle:
+        sys.stdout = handle
+        sys.stderr = handle
+        root.handlers = []
+        try:
+            yield
+        finally:
+            logging.shutdown()
+            root.handlers = previous_handlers
+            root.setLevel(previous_level)
+            sys.stdout = previous_stdout
+            sys.stderr = previous_stderr
+
+
 def _process_entry(payload: dict[str, Any], result_queue) -> None:
-    result_queue.put(_run_payload(payload))
+    with _suppress_child_console():
+        result_queue.put(_run_payload(payload))
+
+
+def _truncate(value: str, max_length: int = 44) -> str:
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3] + "..."
 
 
 @dataclass
@@ -97,6 +131,7 @@ class _ActiveRun:
     process: Any
     result_queue: Any
     started: float
+    status: str = "running"
 
 
 class LocalProcessRunner:
@@ -105,16 +140,23 @@ class LocalProcessRunner:
         output_root: str,
         concurrency: int = 1,
         poll_interval: float = 0.2,
+        show_progress: bool = False,
     ) -> None:
         if concurrency <= 0:
             raise ValueError("concurrency must be greater than 0")
         self.output_root = output_root
         self.concurrency = concurrency
         self.poll_interval = poll_interval
+        self.show_progress = show_progress
         self._context = mp.get_context()
 
     def run_many(self, requests: Iterable[RunRequest]) -> list[RunResponse]:
         pending = list(requests)
+        if self.show_progress:
+            return self._run_many_with_progress(pending)
+        return self._run_many(pending)
+
+    def _run_many(self, pending: list[RunRequest]) -> list[RunResponse]:
         active: list[_ActiveRun] = []
         responses: list[RunResponse] = []
 
@@ -144,6 +186,88 @@ class LocalProcessRunner:
 
         return responses
 
+    def _run_many_with_progress(self, pending: list[RunRequest]) -> list[RunResponse]:
+        from rich.console import Group
+        from rich.live import Live
+        from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
+        from rich.table import Table
+
+        total = len(pending)
+        status_counts = {"completed": 0, "failed": 0, "timeout": 0}
+        progress = Progress(
+            TextColumn("[bold]tbrew run[/bold]"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+        )
+        task_id = progress.add_task("tasks", total=total)
+
+        def render(active: list[_ActiveRun]) -> Group:
+            table = Table(title="Active Jobs", expand=True)
+            table.add_column("Instance")
+            table.add_column("PID", justify="right")
+            table.add_column("Elapsed", justify="right")
+            table.add_column("Status")
+            table.add_column("Output")
+            for run in active:
+                elapsed = int(time.time() - run.started)
+                table.add_row(
+                    _truncate(run.request.instance_id),
+                    str(run.process.pid or "-"),
+                    f"{elapsed}s",
+                    run.status,
+                    str(Path(run.output_dir).relative_to(Path(self.output_root).resolve())),
+                )
+            if not active:
+                table.add_row("-", "-", "-", "idle", "-")
+
+            summary = Table.grid(expand=True)
+            summary.add_column()
+            summary.add_row(
+                f"completed={status_counts['completed']} "
+                f"failed={status_counts['failed']} "
+                f"timeout={status_counts['timeout']} "
+                f"pending={len(pending)}"
+            )
+            return Group(progress, summary, table)
+
+        with Live(render([]), refresh_per_second=4) as live:
+            active: list[_ActiveRun] = []
+            responses: list[RunResponse] = []
+            try:
+                while pending or active:
+                    while pending and len(active) < self.concurrency:
+                        request = pending.pop(0)
+                        active.append(self._start(request))
+
+                    made_progress = False
+                    for run in list(active):
+                        response = self._poll(run)
+                        if response is None:
+                            continue
+                        active.remove(run)
+                        save_response(run.output_dir, response)
+                        responses.append(response)
+                        progress.advance(task_id)
+                        if response.exit_status.lower() == "timeout":
+                            status_counts["timeout"] += 1
+                        elif response.error or response.exit_status.lower() == "error":
+                            status_counts["failed"] += 1
+                        else:
+                            status_counts["completed"] += 1
+                        made_progress = True
+
+                    live.update(render(active))
+                    if active and not made_progress:
+                        time.sleep(self.poll_interval)
+            finally:
+                for run in active:
+                    if run.process.is_alive():
+                        run.process.terminate()
+                    run.process.join()
+
+        return responses
+
     def _start(self, request: RunRequest) -> _ActiveRun:
         spec = resolve_request_runner(request)
         output_dir = build_output_dir(self.output_root, request)
@@ -158,13 +282,14 @@ class LocalProcessRunner:
             args=(payload, result_queue),
         )
         process.start()
-        logger.info(
-            "[%s] started pid=%s runner=%s output_dir=%s",
-            request.instance_id,
-            process.pid,
-            f"{spec.task}/{spec.agent}",
-            output_dir,
-        )
+        if not self.show_progress:
+            logger.info(
+                "[%s] started pid=%s runner=%s output_dir=%s",
+                request.instance_id,
+                process.pid,
+                f"{spec.task}/{spec.agent}",
+                output_dir,
+            )
         return _ActiveRun(
             request=request,
             output_dir=output_dir,

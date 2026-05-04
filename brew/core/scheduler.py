@@ -51,9 +51,6 @@ class Scheduler:
             )
             self._initialized = True
 
-    def warmup(self) -> None:
-        self._ensure_init()
-
     async def run(
         self,
         request: RunRequest,
