@@ -59,6 +59,20 @@ RUNNER_SPECS: tuple[RunnerSpec, ...] = (
         entrypoint="run_osworld",
         # aliases=("osworld"),
     ),
+    RunnerSpec(
+        task="terminal",
+        agent="mini-swe-agent",
+        module="brew.harness.runner.terminal.miniswe",
+        entrypoint="run_tb_miniswe",
+        aliases=("miniswe", "terminal-miniswe"),
+    ),
+    RunnerSpec(
+        task="terminal",
+        agent="terminus2",
+        module="brew.harness.runner.terminal.terminus2",
+        entrypoint="run_tb_terminus2",
+        aliases=("terminus-2",),
+    ),
 )
 
 
@@ -70,9 +84,9 @@ for spec in RUNNER_SPECS:
 
 LEGACY_RUNNER_ALIASES: dict[str, tuple[str, str]] = {}
 for spec in RUNNER_SPECS:
-    LEGACY_RUNNER_ALIASES[_normalize_name(spec.agent)] = spec.key
+    LEGACY_RUNNER_ALIASES.setdefault(_normalize_name(spec.agent), spec.key)
     for alias in spec.aliases:
-        LEGACY_RUNNER_ALIASES[_normalize_name(alias)] = spec.key
+        LEGACY_RUNNER_ALIASES.setdefault(_normalize_name(alias), spec.key)
 
 def resolve_runner(task: str, agent: str) -> RunnerSpec:
     key = (_normalize_name(task), _normalize_name(agent))

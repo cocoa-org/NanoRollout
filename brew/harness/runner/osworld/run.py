@@ -18,10 +18,7 @@ if REPO_ROOT not in sys.path:
 
 logger = logging.getLogger(__name__)
 
-OSWORLD_DATA_ROOT = os.environ.get(
-    "OSWORLD_ROOT",
-    "/mnt/weka/home/zhuojun.cheng/uda-org/OSWorld",
-)
+OSWORLD_DATA_ROOT = os.environ.get("OSWORLD_ROOT")
 
 # Agent registry — add new agents here
 AGENT_REGISTRY = {

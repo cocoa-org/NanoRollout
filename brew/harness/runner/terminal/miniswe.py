@@ -1,4 +1,4 @@
-"""OH-Core (CodeAct) runner entry point."""
+"""Terminal Bench MiniSweAgent runner entry point."""
 
 import gc
 import logging
@@ -6,64 +6,58 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from brew.harness.agents.swe.openhands.prompts import (
-    build_core_user_prompt as build_user_prompt,
-)
-from .common import (
+from brew.harness.runner.terminal.common import (
+    DEFAULT_TERMINAL_BENCH_REPO_URL,
     _build_agent_config,
     _build_agent_metrics,
     _build_metadata,
     _ensure_logging,
-    _resolve_naming_strategy,
-    _run_eval,
+    _resolve_exit_status,
     _write_artifacts,
     build_reward_payload,
     create_environment,
     env_logging,
     eval_logging,
-    resolve_instance,
+    ensure_tb_image,
+    resolve_tb_repo_dir,
+    resolve_tb_instance,
+    resolve_tb_timeouts,
     trial_logging,
-    NamingStrategy,
-    get_swebench_docker_image_name,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def run_oh_core(
+def run_tb_miniswe(
     instance_id: str,
     output_dir: str,
     model_name: str,
     base_url: str = None,
     api_key: str = None,
-    env_type: str = "enroot",
+    env_type: str = "docker",
     sampling_params: Optional[object] = None,
     extra_args: Dict[str, Any] = {},
 ) -> Dict[str, Any]:
 
-    for key in ("step_timeout", "eval_timeout", "env_timeout", "create_timeout", "max_iterations"):
+    from brew.eval.terminalbench.grading import run_tb_eval
+
+    for key in ("env_timeout", "create_timeout", "max_iterations"):
         if key not in extra_args:
             raise ValueError(f"Missing required env argument: {key}")
 
-    for key in ("dataset", "split"):
-        if key not in extra_args:
-            raise ValueError(f"Missing required dataset argument: {key}")
-
     # extra env args
-    step_timeout = extra_args["step_timeout"]
-    eval_timeout = extra_args["eval_timeout"]
+    step_timeout = extra_args.get("step_timeout")
+    eval_timeout = extra_args.get("eval_timeout")
     max_iterations = extra_args["max_iterations"]
     env_timeout = extra_args["env_timeout"]
     create_timeout = extra_args["create_timeout"]
 
-    # extra dataset args
-    # instance_id = extra_args["instance_id"]
-    dataset = extra_args["dataset"]
-    split = extra_args["split"]
-
-    # lazy import eval func
-    if "r2e" in dataset.lower():
-        from brew.eval.r2egym.setup import setup_r2egym_env
+    repo_dir = resolve_tb_repo_dir(
+        extra_args.get("repo_dir"),
+        repo_url=extra_args.get("repo_url", DEFAULT_TERMINAL_BENCH_REPO_URL),
+        revision=extra_args.get("repo_revision"),
+        refresh=extra_args.get("refresh_repo", False),
+    )
 
     _ensure_logging()
     started = time.time()
@@ -81,14 +75,23 @@ def run_oh_core(
     trial_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        instance = resolve_instance(
+        instance = resolve_tb_instance(
             instance_id=instance_id,
-            subset=dataset,
-            split=split,
+            repo_dir=repo_dir,
         )
-        workspace_dir = "/testbed"
-        naming_strategy = _resolve_naming_strategy(dataset)
-        image_name = get_swebench_docker_image_name(instance, env_type, naming_strategy)
+        image_name = ensure_tb_image(instance, env_type=env_type)
+
+        # Resolve per-task timeouts from task.toml (aligned with Harbor)
+        agent_timeout, resolved_eval_timeout = resolve_tb_timeouts(instance, extra_args)
+        logger.info(
+            "[%s] Per-task timeouts: agent=%.0fs, eval=%.0fs",
+            instance_id,
+            agent_timeout,
+            resolved_eval_timeout,
+        )
+        # Use resolved timeouts, fall back to extra_args value for env creation
+        env_step_timeout = step_timeout or agent_timeout
+        env_eval_timeout = eval_timeout or resolved_eval_timeout
 
         api_key = api_key or "abc-123"
         agent_config = _build_agent_config(
@@ -97,6 +100,8 @@ def run_oh_core(
             api_key=api_key,
             max_iterations=max_iterations,
             sampling_params=sampling_params,
+            default_temperature=0.6,
+            default_top_p=0.95,
         )
 
         with env_logging(trial_dir):
@@ -107,6 +112,7 @@ def run_oh_core(
                     env_type,
                     image_name,
                 )
+                workspace_dir = instance.get("workspace_dir") or "/"
                 env_obj = create_environment(
                     env_type=env_type,
                     instance=instance,
@@ -114,56 +120,42 @@ def run_oh_core(
                     workspace_dir=workspace_dir,
                     env_timeout=env_timeout,
                     create_timeout=create_timeout,
-                    step_timeout=step_timeout,
-                    eval_timeout=eval_timeout,
+                    step_timeout=env_step_timeout,
+                    eval_timeout=env_eval_timeout,
                 )
                 env_obj.set_tool_log_context(f"{instance_id}")
                 env_obj.start()
-                env_obj.execute("git config --global core.pager ''")
-                env_obj.execute("git config --global diff.binary false")
 
-                if naming_strategy == NamingStrategy.R2E_GYM:
-                    setup_r2egym_env(env_obj, workspace_dir=workspace_dir)
+                instruction = instance["instruction"]
 
-                if naming_strategy == NamingStrategy.SWE_SMITH:
-                    env_obj.execute(
-                        f"cd {workspace_dir} && git checkout {instance_id}"
-                    )
-
-                problem_statement = instance["problem_statement"]
-                base_commit = instance.get("base_commit")
-                if base_commit:
-                    env_obj._base_commit = base_commit
-                task = build_user_prompt(
-                    workspace_dir=workspace_dir,
-                    problem_statement=problem_statement,
-                    base_commit=base_commit,
-                )
-
-                logger.info("[%s] Running CodeActAgent", instance_id)
+                logger.info("[%s] Running TerminalMiniSweAgent", instance_id)
                 agent_start = time.time()
-                from brew.harness.agents.swe.openhands.codeact import CodeActAgent
+                from brew.harness.agents.terminal.miniswe import TerminalMiniSweAgent
 
-                agent = CodeActAgent(environment=env_obj, config=agent_config)
+                agent = TerminalMiniSweAgent(
+                    environment=env_obj,
+                    config=agent_config,
+                    step_timeout=env_step_timeout,
+                )
                 tools_schema = agent.get_tools_schema()
                 tools_json = tools_schema if tools_schema else None
-                agent_result = agent.run(task)
+                agent_result = agent.run(instruction)
                 agent_time = time.time() - agent_start
 
-                logger.info("[%s] Running eval", instance_id)
+                logger.info("[%s] Running Terminal Bench eval", instance_id)
                 eval_start = time.time()
+                tests_dir = str(Path(repo_dir) / instance_id / "tests")
                 with eval_logging(trial_dir):
-                    eval_payload, eval_output = _run_eval(
+                    eval_payload, eval_output = run_tb_eval(
                         env_obj=env_obj,
                         instance=instance,
-                        eval_timeout=eval_timeout,
-                        workspace_dir=workspace_dir,
-                        dataset=dataset,
+                        eval_timeout=resolved_eval_timeout,
+                        tests_dir=tests_dir,
                     )
                 eval_time = time.time() - eval_start
     except Exception as exc:
         error_msg = str(exc)
-        logger.exception("OH-Core run failed for %s, exception: %s", instance_id, error_msg)
+        logger.exception("TerminalMiniSweAgent run failed for %s", instance_id)
     finally:
         if env_obj:
             env_obj.stop()
@@ -203,8 +195,7 @@ def run_oh_core(
         total_time=time.time() - started,
     )
 
-    exit_status = agent_result.exit_status if not error_msg else "error"
-    # garbage collection
+    exit_status = "Error" if error_msg else _resolve_exit_status(eval_payload)
     gc.collect()
     return {
         "reward": reward_payload.get("reward", 0),

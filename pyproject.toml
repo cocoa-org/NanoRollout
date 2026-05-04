@@ -26,6 +26,7 @@ dependencies = [
   "unidiff",
   "ghapi>=1.0.10",
   "rich",
+  "tenacity>=9.1.4",
 ]
 
 
