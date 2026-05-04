@@ -3,6 +3,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, List
+from omegaconf import OmegaConf
 
 import yaml
 
@@ -53,27 +54,16 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def build_config(args: argparse.Namespace, overrides: List[str]) -> ServerConfig:
-    try:
-        from omegaconf import OmegaConf
-    except ModuleNotFoundError:
-        pass
-    else:
-        base_cfg = OmegaConf.create(ServerConfig().model_dump())
-        file_cfg = (
-            OmegaConf.load(args.config)
-            if Path(args.config).exists()
-            else OmegaConf.create({})
-        )
-        cli_cfg = OmegaConf.from_dotlist(overrides)
-        merged = OmegaConf.merge(base_cfg, file_cfg, cli_cfg)
-        resolved = OmegaConf.to_container(merged, resolve=True)
-        return ServerConfig(**resolved)
-
-    base_cfg = _default_config()
-    file_cfg = _load_config_file(args.config)
-    cli_cfg = _parse_overrides(overrides)
-    merged = _deep_merge(_deep_merge(base_cfg, file_cfg), cli_cfg)
-    return ServerConfig(**merged)
+    base_cfg = OmegaConf.create(ServerConfig().model_dump())
+    file_cfg = (
+        OmegaConf.load(args.config)
+        if Path(args.config).exists()
+        else OmegaConf.create({})
+    )
+    cli_cfg = OmegaConf.from_dotlist(overrides)
+    merged = OmegaConf.merge(base_cfg, file_cfg, cli_cfg)
+    resolved = OmegaConf.to_container(merged, resolve=True)
+    return ServerConfig(**resolved)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--run-name", default=None)
     run_parser.add_argument("--output-dir", default=None)
     run_parser.add_argument("--concurrency", type=int, default=1)
+    run_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the Rich progress UI for local runs.",
+    )
     run_parser.add_argument("--base-url", default=None)
     run_parser.add_argument("--api-key", default=None)
     run_parser.add_argument("--env-type", default=None)
@@ -288,6 +283,7 @@ def _run_direct(config: ServerConfig, args: argparse.Namespace) -> None:
     runner = LocalProcessRunner(
         output_root=output_root,
         concurrency=args.concurrency,
+        show_progress=not args.no_progress,
     )
     responses = runner.run_many(requests)
     payload = [response.model_dump() for response in responses]

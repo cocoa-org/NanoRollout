@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 
 from brew.core.config import ServerConfig
 from brew.core.models import RunRequest, RunResponse
@@ -14,42 +14,19 @@ from brew.core.runners import resolve_request_runner
 from brew.core.scheduler import Scheduler, SchedulerTimeoutError
 
 
-class SubmissionLimitExceededError(RuntimeError):
-    pass
-
-
 class ResourceManager:
-    def __init__(self, concurrency: int, max_submissions: int = 0) -> None:
+    def __init__(self, concurrency: int) -> None:
         if concurrency <= 0:
             raise ValueError("concurrency must be greater than 0")
         self._concurrency = asyncio.Semaphore(concurrency)
-        self._max_submissions = max_submissions
-        self._submission_lock = asyncio.Lock()
-        self._submissions = 0
 
     @asynccontextmanager
     async def reserve(self) -> AsyncIterator[None]:
-        counted = await self._count_submission()
         await self._concurrency.acquire()
         try:
             yield
         finally:
             self._concurrency.release()
-            if counted:
-                await self._release_submission()
-
-    async def _count_submission(self) -> bool:
-        if self._max_submissions <= 0:
-            return False
-        async with self._submission_lock:
-            if self._submissions >= self._max_submissions:
-                raise SubmissionLimitExceededError("Too many pending jobs.")
-            self._submissions += 1
-            return True
-
-    async def _release_submission(self) -> None:
-        async with self._submission_lock:
-            self._submissions = max(0, self._submissions - 1)
 
 
 class BrewServer:
@@ -57,7 +34,6 @@ class BrewServer:
         self.config = config
         self._resources = ResourceManager(
             concurrency=config.concurrency,
-            max_submissions=config.max_pending_jobs,
         )
         self._scheduler = Scheduler(
             config.scheduler,
@@ -67,7 +43,7 @@ class BrewServer:
     def setup_app(self) -> FastAPI:
         @asynccontextmanager
         async def _lifespan(_: FastAPI):
-            self._scheduler.warmup()
+            self._scheduler._ensure_init()
             yield
             self.close()
 
@@ -93,8 +69,6 @@ class BrewServer:
         try:
             async with self._resources.reserve():
                 result = await self._scheduler.run(body, output_dir)
-        except SubmissionLimitExceededError as exc:
-            raise HTTPException(status_code=429, detail=str(exc)) from exc
         except SchedulerTimeoutError as exc:
             response = self._build_response(body, output_dir, "Timeout", str(exc))
         except Exception as exc:
