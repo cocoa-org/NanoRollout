@@ -4,11 +4,12 @@ from typing import Any
 
 from jinja2 import BaseLoader, Environment as JinjaEnvironment
 
-from harness.agents.prompts.terminal import (
+from brew.harness.agents.swe.mini_swe_agent.minisweagent import MiniSweAgent
+
+from .prompts import (
     INSTANCE_TEMPLATE,
     SYSTEM_TEMPLATE,
 )
-from harness.agents.swe.miniswe import MiniSweAgent
 
 _jinja_env = JinjaEnvironment(loader=BaseLoader())
 

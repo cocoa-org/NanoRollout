@@ -34,16 +34,16 @@ try:
 except ImportError:  # pragma: no cover
     get_model_info = None
 
-from harness.agents.prompts.terminal.terminus2 import (
+from .prompts import (
     COMPLETION_CONFIRMATION_JSON,
     COMPLETION_CONFIRMATION_XML,
     JSON_PROMPT_TEMPLATE,
     TIMEOUT_TEMPLATE,
     XML_PROMPT_TEMPLATE,
 )
-from harness.agents.terminal.terminus_json_parser import TerminusJSONPlainParser
-from harness.agents.terminal.terminus_xml_parser import TerminusXMLPlainParser
-from harness.agents.terminal.tmux_adapter import TmuxAdapter
+from .terminus_json_parser import TerminusJSONPlainParser
+from .terminus_xml_parser import TerminusXMLPlainParser
+from .tmux_adapter import TmuxAdapter
 
 if TYPE_CHECKING:
     from brew.envs.shell_env.base import ShellEnvironment as BaseEnvironment
@@ -499,7 +499,8 @@ class Terminus2Agent:
             "changed=0; "
             'for f in "${files[@]}"; do '
             '  [ -f "$f" ] || continue; '
-            '  before=$(grep -cE "(https?://)([a-z]+\\.)?(archive|security|ports)\\.ubuntu\\.com" "$f" 2>/dev/null || echo 0); '
+            '  before=$(grep -cE "(https?://)([a-z]+\\.)?(archive|security|ports)\\.ubuntu\\.com" "$f" 2>/dev/null); '
+            '  before=${before:-0}; '
             "  [ \"$before\" -gt 0 ] || { echo \"[ubuntu-mirror] no ubuntu.com URLs in $f (skip)\"; continue; }; "
             '  $SUDO sed -i.bak -E "s#(https?://)([a-z]+\\.)?(archive|security)\\.ubuntu\\.com#\\1${HOST}#g; s#(https?://)ports\\.ubuntu\\.com#\\1${HOST}#g" "$f" '
             '    && echo "[ubuntu-mirror] edited $f ($before matches)" && changed=$((changed+1)) '

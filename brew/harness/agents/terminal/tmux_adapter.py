@@ -1,11 +1,5 @@
 """
-Aligned with Harbor's TmuxSession (terminus_2/tmux_session.py):
-- PTY allocation via `script -qc`
-- TERM/SHELL env vars
-- shlex.quote() key escaping (no -l flag)
-- pipe-pane logging
-- tmux/asciinema auto-installation
-- asciinema terminal recording
+Adapted from Harbor's TmuxSession (terminus_2/tmux_session.py):
 """
 
 import logging

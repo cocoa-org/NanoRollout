@@ -66,13 +66,7 @@ def build_config(args: argparse.Namespace, overrides: List[str]) -> ServerConfig
     return ServerConfig(**resolved)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="tbrew")
-    parser.add_argument("--config", type=str, default="config.yaml", help="Config file path")
-    subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("serve", help="Start the HTTP server")
-
-    run_parser = subparsers.add_parser("run", help="Run instances without HTTP or Ray")
+def _add_common_run_args(run_parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument(
         "--instance-id",
         action="append",
@@ -106,13 +100,71 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--task-timeout-s", type=int, default=None)
     run_parser.add_argument("--sampling-params", default=None, help="JSON object")
     run_parser.add_argument("--extra-args", default=None, help="JSON object")
-    run_parser.add_argument("--dataset", default="verified")
-    run_parser.add_argument("--split", default="test")
+
+
+def _add_runner_timeout_args(run_parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--step-timeout", type=int, default=600)
     run_parser.add_argument("--eval-timeout", type=int, default=1800)
     run_parser.add_argument("--env-timeout", type=int, default=120)
     run_parser.add_argument("--create-timeout", type=int, default=600)
     run_parser.add_argument("--max-iterations", type=int, default=100)
+
+
+def _add_swe_run_args(run_parser: argparse.ArgumentParser) -> None:
+    run_parser.add_argument("--dataset", default="verified")
+    run_parser.add_argument("--split", default="test")
+    _add_runner_timeout_args(run_parser)
+
+
+def _add_terminal_run_args(run_parser: argparse.ArgumentParser) -> None:
+    _add_runner_timeout_args(run_parser)
+    run_parser.add_argument(
+        "--repo-url",
+        default="https://github.com/harbor-framework/terminal-bench-2.git",
+        help="Terminal Bench repository URL.",
+    )
+    run_parser.add_argument(
+        "--repo-dir",
+        default=None,
+        help="Local Terminal Bench repository directory.",
+    )
+    run_parser.add_argument(
+        "--repo-revision",
+        default=None,
+        help="Terminal Bench repository branch, tag, or commit.",
+    )
+    run_parser.add_argument(
+        "--refresh-repo",
+        nargs="?",
+        const=True,
+        default=False,
+        type=_parse_bool,
+        help="Refresh the cached Terminal Bench repository before running.",
+    )
+    run_parser.add_argument("--parser-name", default="json")
+    run_parser.add_argument("--timeout-multiplier", type=float, default=1.0)
+
+
+def build_parser(
+    task: str | None = None,
+    *,
+    add_help: bool = True,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="tbrew", add_help=add_help)
+    parser.add_argument("--config", type=str, default="config.yaml", help="Config file path")
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("serve", help="Start the HTTP server", add_help=add_help)
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run instances without HTTP or Ray",
+        add_help=add_help,
+    )
+    _add_common_run_args(run_parser)
+    if task == "swe":
+        _add_swe_run_args(run_parser)
+    elif task == "terminal":
+        _add_terminal_run_args(run_parser)
     return parser
 
 
@@ -125,6 +177,17 @@ def _load_json_arg(raw: str | None) -> dict | None:
     return value
 
 
+def _parse_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
 def _split_instance_ids(values: list[str]) -> list[str]:
     instance_ids: list[str] = []
     for value in values:
@@ -132,9 +195,7 @@ def _split_instance_ids(values: list[str]) -> list[str]:
     return instance_ids
 
 
-SWE_EXTRA_ARG_FIELDS = {
-    "dataset",
-    "split",
+RUNNER_TIMEOUT_EXTRA_ARG_FIELDS = {
     "step_timeout",
     "eval_timeout",
     "env_timeout",
@@ -143,26 +204,72 @@ SWE_EXTRA_ARG_FIELDS = {
 }
 
 
+SWE_EXTRA_ARG_FIELDS = {
+    "dataset",
+    "split",
+    *RUNNER_TIMEOUT_EXTRA_ARG_FIELDS,
+}
+
+
+TERMINAL_EXTRA_ARG_FIELDS = {
+    *RUNNER_TIMEOUT_EXTRA_ARG_FIELDS,
+    "repo_url",
+    "repo_dir",
+    "repo_revision",
+    "refresh_repo",
+    "parser_name",
+    "timeout_multiplier",
+}
+
+
+def _extra_arg_fields_for_task(task: str) -> set[str]:
+    if task == "swe":
+        return SWE_EXTRA_ARG_FIELDS
+    if task == "terminal":
+        return TERMINAL_EXTRA_ARG_FIELDS
+    return set()
+
+
 def _build_extra_args(
     args: argparse.Namespace,
     task: str | None = None,
 ) -> dict[str, Any]:
     extra_args = _load_json_arg(args.extra_args) or {}
     task = task or _resolve_cli_task(args)
-    if task != "swe":
+
+    runner_defaults = {
+        "step_timeout": getattr(args, "step_timeout", 600),
+        "eval_timeout": getattr(args, "eval_timeout", 1800),
+        "env_timeout": getattr(args, "env_timeout", 120),
+        "create_timeout": getattr(args, "create_timeout", 600),
+        "max_iterations": getattr(args, "max_iterations", 100),
+    }
+    if task == "swe":
+        defaults = {
+            "dataset": getattr(args, "dataset", "verified"),
+            "split": getattr(args, "split", "test"),
+            **runner_defaults,
+        }
+    elif task == "terminal":
+        defaults = {
+            **runner_defaults,
+            "repo_url": getattr(
+                args,
+                "repo_url",
+                "https://github.com/harbor-framework/terminal-bench-2.git",
+            ),
+            "repo_dir": getattr(args, "repo_dir", None),
+            "repo_revision": getattr(args, "repo_revision", None),
+            "refresh_repo": getattr(args, "refresh_repo", False),
+            "parser_name": getattr(args, "parser_name", "json"),
+            "timeout_multiplier": getattr(args, "timeout_multiplier", 1.0),
+        }
+    else:
         return extra_args
 
-    defaults = {
-        "dataset": args.dataset,
-        "split": args.split,
-        "step_timeout": args.step_timeout,
-        "eval_timeout": args.eval_timeout,
-        "env_timeout": args.env_timeout,
-        "create_timeout": args.create_timeout,
-        "max_iterations": args.max_iterations,
-    }
     for key, value in defaults.items():
-        extra_args.setdefault(key, value)
+        if value is not None:
+            extra_args.setdefault(key, value)
     return extra_args
 
 
@@ -206,7 +313,7 @@ def _row_to_request(row: dict[str, Any], args: argparse.Namespace) -> RunRequest
 
     extra_args = _build_extra_args(args, task=task_for_defaults)
     extra_args.update(row_extra_args)
-    for key in SWE_EXTRA_ARG_FIELDS:
+    for key in _extra_arg_fields_for_task(task_for_defaults):
         if key in row:
             extra_args[key] = row[key]
 
@@ -271,7 +378,8 @@ def _build_run_requests(args: argparse.Namespace) -> list[RunRequest]:
         requests.extend(
             _row_to_request(row, args) for row in _load_request_rows(args.request_file)
         )
-    requests.extend(_build_cli_requests(args))
+    else:
+        requests.extend(_build_cli_requests(args))
     if not requests:
         raise ValueError("Provide --instance-id or --request-file")
     return requests
@@ -304,7 +412,12 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    parser = build_parser()
+    parser = build_parser(add_help=False)
+    preliminary_args, _ = parser.parse_known_args()
+    if preliminary_args.command == "run":
+        parser = build_parser(task=_resolve_cli_task(preliminary_args))
+    else:
+        parser = build_parser()
     args, overrides = parser.parse_known_args()
 
     config = build_config(args, overrides)
