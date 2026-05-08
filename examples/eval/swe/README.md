@@ -43,10 +43,10 @@ OPENAI_API_KEY="abc-123" \
 bash examples/eval/swe/run_openhands.sh
 ```
 
-Or call `tbrew` directly:
+Or call `nro` directly:
 
 ```bash
-tbrew run \
+nro run \
   --task swe \
   --agent OpenHands \
   --request-file examples/eval/swe/data/swebench_verified.jsonl \

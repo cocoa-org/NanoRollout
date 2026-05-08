@@ -25,7 +25,7 @@ TIMEOUT_MULTIPLIER="${TIMEOUT_MULTIPLIER:-1.0}"
 PARSER_NAME="${PARSER_NAME:-json}"
 
 cmd=(
-  tbrew run
+  nro run
   --task terminal
   --agent "${AGENT}"
   --model-name "${MODEL_NAME}"

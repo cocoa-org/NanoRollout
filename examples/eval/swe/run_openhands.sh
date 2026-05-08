@@ -14,7 +14,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-./results}"
 CONCURRENCY="${CONCURRENCY:-1}"
 
 cmd=(
-  tbrew run
+  nro run
   --task swe
   --agent "${AGENT}"
   --model-name "${MODEL_NAME}"
