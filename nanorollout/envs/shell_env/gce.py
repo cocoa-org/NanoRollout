@@ -22,7 +22,7 @@ from .gce_worker.proto import worker_pb2, worker_pb2_grpc
 
 logger = logging.getLogger(__name__)
 
-_PWD_MARKER = "__OH_CORE_PWD__"
+_PWD_MARKER = "__NANOROLLOUT_PWD__"
 
 
 class GCEEnvironment(BaseEnvironment):
