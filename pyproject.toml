@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "brew"
+name = "nanorollout"
 version = "0.1.0"
 description = "Easy agent rollout at scale"
 readme = "README.md"
@@ -17,6 +17,14 @@ dependencies = [
   "ray>=2.49",
   "httpx>=0.25",
   "modal",
+  "openai>=2.6.1",
+  "anthropic>=0.75.0",
+  "google-genai>=0.5.0",
+  "requests>=2.32.5",
+  "Pillow>=10.0.0",
+  "colorama>=0.4.6",
+  "agent-sandbox>=0.0.16",
+  "playwright>=1.58.0",
   "psutil>=5.9",
   "wandb>=0.17",
   "jinja2",
@@ -31,9 +39,9 @@ dependencies = [
 
 
 [project.scripts]
-tbrew = "brew.cli:main"
+nro = "nanorollout.cli:main"
 
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["brew*"]
+include = ["nanorollout*"]
