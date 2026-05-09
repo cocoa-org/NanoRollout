@@ -89,34 +89,30 @@ class ClaudeCode(InstalledAgentBase):
         return match.group(1) if match else stdout.strip()
 
     def install(self, environment: ShellEnvironment) -> None:
-        self.exec(
+        self.ensure_tools_available(
             environment,
-            (
+            required_tools=["curl", "bash"],
+            install_body=(
                 "if command -v apk >/dev/null 2>&1; then "
-                "  apk add --no-cache curl bash nodejs npm; "
+                "  ${SUDO}apk add --no-cache curl bash; "
                 "elif command -v apt-get >/dev/null 2>&1; then "
-                "  apt-get update && apt-get install -y curl; "
+                "  ${SUDO}apt-get update && ${SUDO}apt-get install -y curl bash; "
                 "elif command -v yum >/dev/null 2>&1; then "
-                "  yum install -y curl; "
+                "  ${SUDO}yum install -y curl bash; "
                 "else "
-                '  echo "Warning: No known package manager found, assuming curl is available" >&2; '
+                '  echo "Missing required tools: $missing and no known package manager is available." >&2; '
+                "  exit 1; "
                 "fi"
             ),
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-            timeout_sec=self.install_timeout_sec,
+            prefer_root=True,
         )
 
         version_flag = f" {self._version}" if self._version else ""
-        package_suffix = f"@{self._version}" if self._version else ""
-        self.exec(
+        self.install_exec(
             environment,
             (
                 "set -euo pipefail; "
-                "if command -v apk >/dev/null 2>&1; then "
-                f"  npm install -g @anthropic-ai/claude-code{package_suffix}; "
-                "else "
-                f"  curl -fsSL https://claude.ai/install.sh | bash -s --{version_flag}; "
-                "fi && "
+                f"curl -fsSL https://claude.ai/install.sh | bash -s --{version_flag} && "
                 "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && "
                 'export PATH="$HOME/.local/bin:$PATH" && '
                 "claude --version"
@@ -796,7 +792,7 @@ class ClaudeCode(InstalledAgentBase):
         *,
         timeout_sec: int | None = None,
     ) -> None:
-        escaped_instruction = shlex.quote(instruction)
+        escaped_instruction = shlex.quote(self.build_prompt(instruction))
         use_bedrock = self._is_bedrock_mode()
 
         env: dict[str, str | None] = {
@@ -886,8 +882,8 @@ class ClaudeCode(InstalledAgentBase):
         extra_flags = f"{cli_flags} " if cli_flags else ""
         output_path = self.remote_logs_dir / "claude-code.txt"
 
-        self.exec(environment, setup_command, env=env, timeout_sec=120)
-        self.exec(
+        self.runtime_exec(environment, setup_command, env=env, timeout_sec=120)
+        self.runtime_exec(
             environment,
             (
                 'export PATH="$HOME/.local/bin:$PATH"; '

@@ -9,38 +9,16 @@ import shlex
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from .base import ExecutionResult, ShellEnvironment, extract_cwd_marker
 
-if TYPE_CHECKING:
-    from modal import App, Image, Sandbox
-else:
-    App = Image = Sandbox = Secret = Volume = None
+from modal import App, Image, Sandbox, Secret, Volume
 
 logger = logging.getLogger(__name__)
 
 _PWD_MARKER = "__NANOROLLOUT_PWD__"
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _ensure_modal_symbols() -> None:
-    global App, Image, Sandbox, Secret, Volume
-
-    if all(symbol is not None for symbol in (App, Image, Sandbox, Secret, Volume)):
-        return
-
-    from modal import App as ModalApp
-    from modal import Image as ModalImage
-    from modal import Sandbox as ModalSandbox
-    from modal import Secret as ModalSecret
-    from modal import Volume as ModalVolume
-
-    App = ModalApp
-    Image = ModalImage
-    Sandbox = ModalSandbox
-    Secret = ModalSecret
-    Volume = ModalVolume
 
 
 @dataclass
@@ -136,7 +114,6 @@ class ModalEnvironment(ShellEnvironment):
         self._run_async(self._start_async())
 
     async def _start_async(self) -> None:
-        _ensure_modal_symbols()
         self._image = self._build_image()
         assert App is not None
         assert Sandbox is not None
@@ -345,8 +322,6 @@ class ModalEnvironment(ShellEnvironment):
         )
 
     def _build_image(self) -> "Image":
-        _ensure_modal_symbols()
-        assert Image is not None
         image_path = Path(self.config.image).expanduser()
         if image_path.exists():
             if image_path.is_dir():

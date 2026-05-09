@@ -8,30 +8,19 @@ import re
 import shlex
 import time
 import uuid
+
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
-from .types import ToolResult
-
-GIT_USER_EMAIL = "evaluation@openhands.dev"
-GIT_USER_NAME = "OpenHands Evaluation"
-GIT_COMMIT_MESSAGE = "patch"
-
-
-@dataclass
-class ExecutionResult:
-    """Result of a command execution."""
-
-    output: str
-    exit_code: int
-
-
-DEFAULT_TRUNCATE_NOTICE = "<response clipped>"
-DEFAULT_TRUNCATE_NOTICE_WITH_PERSIST = (
-    "<response clipped; full output saved to {file_path} at line {line_num}>"
+from .types import ExecutionResult, ToolResult
+from .types import (
+    GIT_USER_EMAIL,
+    GIT_USER_NAME,
+    GIT_COMMIT_MESSAGE,
+    DEFAULT_TRUNCATE_NOTICE,
+    DEFAULT_TRUNCATE_NOTICE_WITH_PERSIST,
+    TOOL_LOGGER_NAME,
 )
-TOOL_LOGGER_NAME = "nanorollout.envs.tools"
 
 
 def extract_cwd_marker(output: str, marker: str) -> tuple[str, Optional[str]]:

@@ -122,6 +122,27 @@ RUNNER_SPECS: tuple[RunnerSpec, ...] = (
         entrypoint="run_cocoa_agent",
         aliases=("cocoa", "cocoagent"),
     ),
+    RunnerSpec(
+        task="cocoa-bench",
+        agent="claude-code",
+        module="nanorollout.harness.runner.cocoa_bench.installed",
+        entrypoint="run_cocoa_claude_code",
+        aliases=("claudecode", "cocoa-claude-code"),
+    ),
+    RunnerSpec(
+        task="cocoa-bench",
+        agent="qwen-code",
+        module="nanorollout.harness.runner.cocoa_bench.installed",
+        entrypoint="run_cocoa_qwen_code",
+        aliases=("qwen-coder", "cocoa-qwen-code"),
+    ),
+    RunnerSpec(
+        task="cocoa-bench",
+        agent="opencode",
+        module="nanorollout.harness.runner.cocoa_bench.installed",
+        entrypoint="run_cocoa_opencode",
+        aliases=("open-code", "cocoa-opencode"),
+    ),
 )
 
 

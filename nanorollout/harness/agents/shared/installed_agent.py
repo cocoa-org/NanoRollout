@@ -207,6 +207,7 @@ class InstalledAgentBase(ABC):
         self._resolved_flags = self._resolve_flag_values()
         self._resolved_env_vars = self._resolve_env_values()
         self._remote_logs_dir: PurePosixPath | None = None
+        self._install_user_env: dict[str, str] | None = None
 
     @staticmethod
     @abstractmethod
@@ -343,6 +344,144 @@ class InstalledAgentBase(ABC):
             )
         return result
 
+    def _get_install_user_env(
+        self,
+        environment: ShellEnvironment,
+    ) -> dict[str, str]:
+        if self._install_user_env is not None:
+            return dict(self._install_user_env)
+
+        result = environment.execute(
+            (
+                "printf 'HOME=%s\\n' \"$HOME\"; "
+                "printf 'USER=%s\\n' \"${USER:-}\"; "
+                "printf 'LOGNAME=%s\\n' \"${LOGNAME:-}\""
+            ),
+            timeout=30,
+        )
+        env: dict[str, str] = {}
+        if result.exit_code == 0:
+            for line in result.output.splitlines():
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key in {"HOME", "USER", "LOGNAME"} and value:
+                    env[key] = value
+        self._install_user_env = env
+        return dict(env)
+
+    def runtime_exec(
+        self,
+        environment: ShellEnvironment,
+        command: str,
+        *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout_sec: int | None = None,
+        check: bool = True,
+    ) -> ExecutionResult:
+        execute_root = getattr(environment, "execute_root", None)
+        if callable(execute_root):
+            wrapped = self._build_wrapped_command(command, cwd=cwd)
+            merged_env = self._get_install_user_env(environment)
+            if env:
+                merged_env.update(env)
+            result = execute_root(
+                wrapped,
+                timeout=timeout_sec,
+                env=merged_env or None,
+            )
+            if check and result.exit_code != 0:
+                raise NonZeroAgentExitCodeError(
+                    f"Command failed (exit {result.exit_code}): {command}\n{result.output}"
+                )
+            return result
+        return self.exec(
+            environment,
+            command,
+            env=env,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+            check=check,
+        )
+
+    def install_exec(
+        self,
+        environment: ShellEnvironment,
+        command: str,
+        *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout_sec: int | None = None,
+        check: bool = True,
+    ) -> ExecutionResult:
+        return self.runtime_exec(
+            environment,
+            command,
+            env=env,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+            check=check,
+        )
+
+    def ensure_tools_available(
+        self,
+        environment: ShellEnvironment,
+        *,
+        required_tools: list[str],
+        install_body: str,
+        timeout_sec: int | None = None,
+        extra_env: dict[str, str] | None = None,
+        prefer_root: bool = False,
+    ) -> None:
+        """Ensure required shell tools exist, installing them only when needed."""
+        tools_literal = " ".join(shlex.quote(tool) for tool in required_tools)
+        missing_result = environment.execute(
+            (
+                "set -euo pipefail; "
+                f"missing=''; for tool in {tools_literal}; do "
+                '  if ! command -v "$tool" >/dev/null 2>&1; then missing="$missing $tool"; fi; '
+                "done; "
+                'printf "%s" "${missing# }"'
+            ),
+            timeout=30,
+        )
+        missing_tools = missing_result.output.strip()
+        if missing_result.exit_code == 0 and not missing_tools:
+            return
+
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+        if extra_env:
+            env.update(extra_env)
+
+        install_timeout = timeout_sec or self.install_timeout_sec
+        install_command = (
+            "set -euo pipefail; "
+            f"missing={shlex.quote(missing_tools or ' '.join(required_tools))}; "
+            'if [ "$(id -u)" -eq 0 ]; then SUDO=""; '
+            'elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then SUDO="sudo -n "; '
+            "else "
+            '  echo "Missing required tools: $missing. Current user cannot install packages (need root or passwordless sudo)." >&2; '
+            "  exit 1; "
+            "fi; "
+            f"{install_body}"
+        )
+        if prefer_root:
+            self.install_exec(
+                environment,
+                install_command,
+                env=env,
+                timeout_sec=install_timeout,
+            )
+            return
+
+        self.exec(
+            environment,
+            install_command,
+            env=env,
+            timeout_sec=install_timeout,
+        )
+
     def get_version_command(self) -> str | None:
         return None
 
@@ -385,7 +524,7 @@ class InstalledAgentBase(ABC):
             return
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         remote_dir = shlex.quote(self.remote_logs_dir.as_posix())
-        result = self.exec(
+        result = self.runtime_exec(
             environment,
             (
                 f"if [ -d {remote_dir} ]; then "
@@ -503,6 +642,10 @@ class InstalledAgentBase(ABC):
     @abstractmethod
     def install(self, environment: ShellEnvironment) -> None:
         """Install the agent into the environment."""
+
+    def build_prompt(self, instruction: str) -> str:
+        """Build the final prompt sent to the installed CLI."""
+        return instruction
 
     @abstractmethod
     def invoke(

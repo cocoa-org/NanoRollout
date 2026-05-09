@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import shlex
 import time
 from typing import Any, Dict, Optional
 
@@ -19,11 +20,17 @@ from agent_sandbox.browser import (
 )
 from agent_sandbox.types.resolution import Resolution
 
+from nanorollout.envs.shell_env.base import (
+    ExecutionResult,
+    GIT_COMMIT_MESSAGE,
+    GIT_USER_EMAIL,
+    GIT_USER_NAME,
+)
+
 from .utils import retry_request, validate_response, get_logger, colorize
 
 runtime_logger = get_logger("sandbox.runtime")
 logger = get_logger("sandbox")
-
 
 class BaseSandboxRuntime:
     """Lifecycle manager for a sandbox runtime backend."""
@@ -82,6 +89,10 @@ class SandboxClient:
         self.runtime_id: Optional[str] = None
         self.task_name: Optional[str] = None
         self.task_dir: Optional[str] = None
+        self.workspace_dir = str(
+            self.sandbox_config.get("workspace_dir", kwargs.get("workspace_dir", "/home/gem"))
+        )
+        self.timeout = int(self.sandbox_config.get("command_timeout", kwargs.get("command_timeout", 1800)))
         self.llm_provider = self.sandbox_config.get("llm_provider") or os.getenv("COCOA_LLM_PROVIDER")
         self.llm_model = self.sandbox_config.get("llm_model") or os.getenv("COCOA_LLM_MODEL")
         self.browser_resolution = self.sandbox_config.get("browser_resolution")
@@ -1731,13 +1742,14 @@ class UnifiedSandboxClient(SandboxClient):
     def _initialize_sdk_client(self) -> None:
         """Initialize the AIO Sandbox SDK client and create sessions."""
         if self.sdk_client is None:
-            self.sdk_client = Sandbox(base_url=self.base_url)
+            client_timeout = max(float(self.timeout) + 60.0, 300.0)
+            self.sdk_client = Sandbox(base_url=self.base_url, timeout=client_timeout)
             logger.debug(f"Initialized Sandbox SDK client with base_url: {self.base_url}")
             self._configure_browser_resolution()
             
-            # Create shell session
+            # Create shell session for terminal-style command execution.
             try:
-                session = self.sdk_client.shell.create_session(exec_dir="/home/gem")
+                session = self.sdk_client.shell.create_session(exec_dir=self.workspace_dir)
                 self.shell_session_id = session.data.session_id
                 logger.debug(f"Created shell session: {self.shell_session_id}")
             except Exception as e:
@@ -1756,6 +1768,202 @@ class UnifiedSandboxClient(SandboxClient):
         self.sdk_client = None
         self.shell_session_id = None
         self.jupyter_session_id = None
+
+    def _ensure_shell_session(self) -> None:
+        """Ensure the sandbox SDK client and shell session are available."""
+        self._initialize_sdk_client()
+        if self.sdk_client is None:
+            raise RuntimeError("Sandbox SDK client is not initialized")
+        if self.shell_session_id:
+            return
+        session = self.sdk_client.shell.create_session(exec_dir=self.workspace_dir)
+        self.shell_session_id = session.data.session_id
+        logger.debug(f"Created shell session: {self.shell_session_id}")
+
+    def _exec_shell_command(self, command: str, timeout: Optional[int] = None) -> Any:
+        """Execute a shell command via the sandbox shell API."""
+        self._ensure_shell_session()
+        timeout_sec = int(timeout or self.timeout)
+        try:
+            result = self.sdk_client.shell.exec_command(
+                command=command,
+                id=self.shell_session_id,
+                exec_dir=self.workspace_dir,
+                async_mode=False,
+                timeout=timeout_sec,
+                hard_timeout=timeout_sec,
+                truncate=False,
+            )
+            if hasattr(result, "data") and hasattr(result.data, "session_id"):
+                self.shell_session_id = result.data.session_id
+            return result
+        except Exception as session_error:
+            error_str = str(session_error)
+            if "Session not found" not in error_str and "404" not in error_str:
+                raise
+            logger.warning(
+                "Session %s not found, creating a new shell session",
+                self.shell_session_id,
+            )
+            session = self.sdk_client.shell.create_session(exec_dir=self.workspace_dir)
+            self.shell_session_id = session.data.session_id
+            logger.debug(
+                "Created new shell session after error: %s", self.shell_session_id
+            )
+            result = self.sdk_client.shell.exec_command(
+                command=command,
+                id=self.shell_session_id,
+                exec_dir=self.workspace_dir,
+                async_mode=False,
+                timeout=timeout_sec,
+                hard_timeout=timeout_sec,
+                truncate=False,
+            )
+            if hasattr(result, "data") and hasattr(result.data, "session_id"):
+                self.shell_session_id = result.data.session_id
+            return result
+
+    @staticmethod
+    def _join_output_parts(*parts: str) -> str:
+        cleaned = [part.rstrip("\n") for part in parts if part]
+        return "\n".join(cleaned)
+
+    @classmethod
+    def _normalize_shell_response(
+        cls,
+        response: Any,
+        *,
+        status_override: str | None = None,
+        fallback_output: str | None = None,
+    ) -> ExecutionResult:
+        response_success = getattr(response, "success", None)
+        response_message = getattr(response, "message", None) or ""
+        data = getattr(response, "data", None)
+        output = getattr(data, "output", "") or ""
+        exit_code = getattr(data, "exit_code", None)
+        status = (status_override or getattr(data, "status", "") or "").strip().lower()
+
+        combined_output = cls._join_output_parts(
+            output,
+            response_message if response_success is False else "",
+            fallback_output or "",
+        )
+
+        if exit_code is not None:
+            return ExecutionResult(output=combined_output, exit_code=int(exit_code))
+
+        if status == "completed":
+            return ExecutionResult(
+                output=combined_output,
+                exit_code=0 if response_success is not False else 1,
+            )
+        if status in {"timed_out", "hard_timeout", "no_change_timeout"}:
+            return ExecutionResult(output=combined_output, exit_code=124)
+        if status in {"terminated", "killed"}:
+            return ExecutionResult(output=combined_output, exit_code=143)
+        if response_success is False or combined_output:
+            return ExecutionResult(output=combined_output, exit_code=1)
+        return ExecutionResult(output=response_message or "", exit_code=1)
+
+    def _finalize_shell_response(
+        self,
+        response: Any,
+        *,
+        timeout_sec: int,
+    ) -> ExecutionResult:
+        initial = self._normalize_shell_response(response)
+        data = getattr(response, "data", None)
+        status = (getattr(data, "status", "") or "").strip().lower()
+        if status not in {"pending", "running"}:
+            return initial
+
+        wait_response = self.sdk_client.shell.wait_for_process(
+            id=self.shell_session_id,
+            max_wait_seconds=timeout_sec,
+        )
+        wait_status = (
+            getattr(getattr(wait_response, "data", None), "status", "") or ""
+        ).strip().lower()
+        view_response = self.sdk_client.shell.view(id=self.shell_session_id)
+        return self._normalize_shell_response(
+            view_response,
+            status_override=wait_status or None,
+        )
+
+    def execute(self, command: str, timeout: Optional[int] = None) -> ExecutionResult:
+        """Run a shell command and return stdout with an exit code."""
+        timeout_sec = int(timeout or self.timeout)
+        response = self._exec_shell_command(command, timeout_sec)
+        return self._finalize_shell_response(response, timeout_sec=timeout_sec)
+
+    def execute_root(
+        self,
+        command: str,
+        timeout: Optional[int] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> ExecutionResult:
+        """Run a command via the backing runtime when a root-capable path is available."""
+        runtime = getattr(self, "runtime", None)
+        sandbox = getattr(runtime, "sandbox", None)
+        if sandbox is None or getattr(runtime, "runtime_type", None) != "modal":
+            return self.execute(command, timeout=timeout)
+
+        timeout_sec = int(timeout or self.timeout)
+        process = sandbox.exec(
+            "bash",
+            "-lc",
+            command,
+            timeout=timeout_sec,
+            workdir=self.workspace_dir,
+            env=env,
+            text=True,
+        )
+        stdout = "".join(chunk for chunk in process.stdout)
+        stderr = "".join(chunk for chunk in process.stderr)
+        exit_code = process.wait()
+        return ExecutionResult(
+            output=self._join_output_parts(stdout, stderr),
+            exit_code=int(exit_code),
+        )
+
+    def get_git_diff(self) -> str:
+        """Get the git diff of changes made in the workspace."""
+        repo_dir = getattr(self, "_repo_dir", None) or self.workspace_dir
+        base_commit = getattr(self, "_base_commit", None)
+        repo_dir = repo_dir.rstrip("/") if repo_dir else repo_dir
+        if not repo_dir:
+            return ""
+
+        repo_dir_quoted = shlex.quote(repo_dir)
+        check = self.execute(
+            f"cd {repo_dir_quoted} && git rev-parse --is-inside-work-tree"
+        )
+        if check.exit_code != 0:
+            return ""
+
+        self.execute(f"cd {repo_dir_quoted} && git add -A")
+        self.execute(
+            f"cd {repo_dir_quoted} && "
+            f"git config --global user.email '{GIT_USER_EMAIL}' && "
+            f"git config --global user.name '{GIT_USER_NAME}'"
+        )
+        self.execute(
+            f"cd {repo_dir_quoted} && "
+            f"git commit --no-verify -m '{GIT_COMMIT_MESSAGE}'"
+        )
+
+        if base_commit:
+            diff_result = self.execute(
+                f"cd {repo_dir_quoted} && "
+                f"git --no-pager diff --no-color {base_commit} HEAD"
+            )
+            if diff_result.exit_code == 0:
+                return diff_result.output
+
+        fallback = self.execute(
+            f"cd {repo_dir_quoted} && git --no-pager diff --no-color HEAD~1 HEAD"
+        )
+        return fallback.output
     
     def get_feedback(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Get feedback from executing any type of action.
@@ -2065,58 +2273,14 @@ class UnifiedSandboxClient(SandboxClient):
             command = action.get("command")
             if not command:
                 raise ValueError("shell_execute requires 'command' parameter")
-            
-            # Ensure shell session exists before executing command
-            if not self.shell_session_id:
-                try:
-                    session = self.sdk_client.shell.create_session(exec_dir="/home/gem")
-                    self.shell_session_id = session.data.session_id
-                    logger.debug(f"Created new shell session: {self.shell_session_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to create shell session, will let SDK auto-create: {e}")
-                    # If session creation fails, let SDK auto-create by not passing id
-            
-            # Execute command with session ID (or let SDK auto-create if session_id is None)
-            try:
-                result = self.sdk_client.shell.exec_command(
-                    command=command,
-                    id=self.shell_session_id,
-                    exec_dir="/home/gem",
-                    async_mode=False,
-                    timeout=0
-                )
-                
-                # Update session_id in case SDK created a new one
-                if hasattr(result, 'data') and hasattr(result.data, 'session_id'):
-                    self.shell_session_id = result.data.session_id
-                
-                output = result.data.output
-                message = output if output else "Command executed successfully (no output)"
-            except Exception as session_error:
-                # If session not found, try to create a new one and retry
-                error_str = str(session_error)
-                if "Session not found" in error_str or "404" in error_str:
-                    logger.warning(f"Session {self.shell_session_id} not found, creating new session")
-                    try:
-                        session = self.sdk_client.shell.create_session(exec_dir="/home/gem")
-                        self.shell_session_id = session.data.session_id
-                        logger.debug(f"Created new shell session after error: {self.shell_session_id}")
-                        
-                        # Retry command with new session
-                        result = self.sdk_client.shell.exec_command(
-                            command=command,
-                            id=self.shell_session_id,
-                            exec_dir="/home/gem",
-                            async_mode=False,
-                            timeout=0
-                        )
-                        output = result.data.output
-                        message = output if output else "Command executed successfully (no output)"
-                    except Exception as retry_error:
-                        logger.error(f"Failed to create new session and retry: {retry_error}")
-                        raise retry_error
-                else:
-                    raise session_error
+            timeout = action.get("timeout")
+            result = self.execute(command, timeout)
+            if result.output:
+                message = result.output
+            elif result.exit_code == 0:
+                message = "Command executed successfully (no output)"
+            else:
+                message = f"Command failed with exit code {result.exit_code}"
             
             feedback = {"done": False, "message": message}
             self.execution_history.append({"action": action, "feedback": feedback})

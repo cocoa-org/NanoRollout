@@ -3,6 +3,7 @@ Enroot-based environment implementation.
 
 Will deprecate soon and use Apptainer/Singularity instead.
 """
+
 import errno
 import logging
 import os
@@ -10,14 +11,16 @@ import shlex
 import signal
 import subprocess
 import sys
-import textwrap
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .base import ExecutionResult, ShellEnvironment, extract_cwd_marker
+from ..base import ExecutionResult, ShellEnvironment, extract_cwd_marker
+from .orphan_reaper import EXEC_LINE_MARKER
+
+_ORPHAN_REAPER_MAIN = "nanorollout.envs.shell_env.enroot.orphan_reaper"
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +139,7 @@ class EnrootEnvironment(ShellEnvironment):
         self.logger.info(
             "Starting container %s for instance %s",
             self.container_name,
-            self.instance['instance_id'],
+            self.instance["instance_id"],
         )
         create_cmd = [
             self.config.executable,
@@ -152,7 +155,11 @@ class EnrootEnvironment(ShellEnvironment):
             capture_output=True,
             text=True,
             check=True,
-            timeout=self.config.create_timeout if "xarray" not in self.config.image else 1800,
+            timeout=(
+                self.config.create_timeout
+                if "xarray" not in self.config.image
+                else 1800
+            ),
         )
         self.logger.info(
             "Created container %s: %s", self.container_name, result.stdout.strip()
@@ -260,7 +267,9 @@ class EnrootEnvironment(ShellEnvironment):
         except ProcessLookupError:
             return
         except Exception as exc:
-            self.logger.warning("Error resolving process group for pid=%s: %s", process.pid, exc)
+            self.logger.warning(
+                "Error resolving process group for pid=%s: %s", process.pid, exc
+            )
             return
 
         try:
@@ -311,120 +320,13 @@ class EnrootEnvironment(ShellEnvironment):
         container_name = self.container_name
         executable = self.config.executable
 
-        reaper_script = textwrap.dedent(
-            r"""
-            import os
-            import signal
-            import subprocess
-            import sys
-            import time
-
-            parent_pid = int(sys.argv[1])
-            start_process_pid = int(sys.argv[2])
-            container_pid = int(sys.argv[3])
-            container_name = sys.argv[4]
-            executable = sys.argv[5]
-
-            def _parent_alive() -> bool:
-                try:
-                    os.kill(parent_pid, 0)
-                    return True
-                except OSError:
-                    return False
-
-            def _read_cmdline(pid: int) -> str:
-                path = os.path.join("/proc", str(pid), "cmdline")
-                try:
-                    with open(path, "rb") as handle:
-                        raw = handle.read()
-                except Exception:
-                    return ""
-                if not raw:
-                    return ""
-                return raw.decode("utf-8", "ignore").replace("\x00", " ")
-
-            def _looks_like_our_start_process() -> bool:
-                cmdline = _read_cmdline(start_process_pid)
-                if not cmdline:
-                    return False
-                return (
-                    "enroot" in cmdline
-                    and " start " in f" {cmdline} "
-                    and container_name in cmdline
-                )
-
-            def _kill_group(sig: int) -> None:
-                if not _looks_like_our_start_process():
-                    return
-                try:
-                    os.killpg(start_process_pid, sig)
-                except ProcessLookupError:
-                    pass
-                except Exception:
-                    pass
-
-            def _kill_matching_exec(sig: int) -> None:
-                needle_pid = f"enroot exec {container_pid} "
-                needle_name = f"enroot exec {container_name} "
-                marker = "__NANOROLLOUT_PWD__"
-                proc_root = "/proc"
-                if not os.path.isdir(proc_root):
-                    return
-                for name in os.listdir(proc_root):
-                    if not name.isdigit():
-                        continue
-                    pid = int(name)
-                    if pid == os.getpid():
-                        continue
-                    cmdline_path = os.path.join(proc_root, name, "cmdline")
-                    try:
-                        with open(cmdline_path, "rb") as handle:
-                            raw = handle.read()
-                    except Exception:
-                        continue
-                    if not raw:
-                        continue
-                    cmdline = raw.decode("utf-8", "ignore").replace("\x00", " ")
-                    if needle_pid not in cmdline and needle_name not in cmdline:
-                        continue
-                    # Narrow down to NanoRollout-launched enroot exec commands only.
-                    if marker not in cmdline:
-                        continue
-                    try:
-                        os.kill(pid, sig)
-                    except ProcessLookupError:
-                        pass
-                    except Exception:
-                        pass
-
-            while _parent_alive():
-                time.sleep(2.0)
-
-            _kill_group(signal.SIGTERM)
-            _kill_matching_exec(signal.SIGTERM)
-            time.sleep(1.0)
-            _kill_group(signal.SIGKILL)
-            _kill_matching_exec(signal.SIGKILL)
-
-            try:
-                subprocess.run(
-                    [executable, "remove", "-f", container_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=30,
-                )
-            except Exception:
-                pass
-            """
-        )
         python_bin = sys.executable or "python3"
         try:
             self._orphan_reaper_process = subprocess.Popen(
                 [
                     python_bin,
-                    "-c",
-                    reaper_script,
+                    "-m",
+                    _ORPHAN_REAPER_MAIN,
                     str(parent_pid),
                     str(start_process_pid),
                     str(container_pid),
@@ -507,7 +409,7 @@ class EnrootEnvironment(ShellEnvironment):
         if self.container_pid is None:
             raise RuntimeError("Container is not running or PID is unknown")
 
-        marker = "__NANOROLLOUT_PWD__"
+        marker = EXEC_LINE_MARKER
         wrapped_command = (
             f"{command}\n"
             "status=$?\n"

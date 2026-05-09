@@ -8,6 +8,15 @@ bash examples/eval/cocoa/run_cocoabench_modal.sh
 
 By default this runs `trader-joe-chip-shopping` with `env_type=modal`.
 
+Run a CocoaBench task with the installed `claude-code` runner:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN="<oauth-token>" \
+bash examples/eval/cocoa/run_claude_code.sh
+```
+
+By default this runs `trader-joe-2` with `agent=claude-code` and `env_type=docker`.
+
 ## Task Directory
 
 If you want to override the default remote dataset source, point the example at

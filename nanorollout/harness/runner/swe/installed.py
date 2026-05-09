@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import logging
 import time
+from functools import partial, update_wrapper
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -129,7 +131,7 @@ def _run_installed_agent(
     model_name: str,
     base_url: str = None,
     api_key: str = None,
-    env_type: str = "enroot",
+    env_type: str = "modal",
     sampling_params: Optional[object] = None,
     extra_args: Dict[str, Any] = {},
 ) -> Dict[str, Any]:
@@ -282,70 +284,36 @@ def _run_installed_agent(
     }
 
 
-def run_installed_claude_code(
-    instance_id: str,
-    output_dir: str,
-    model_name: str,
-    base_url: str = None,
-    api_key: str = None,
-    env_type: str = "enroot",
-    sampling_params: Optional[object] = None,
-    extra_args: Dict[str, Any] = {},
-) -> Dict[str, Any]:
-    return _run_installed_agent(
-        "claude-code",
-        instance_id,
-        output_dir,
-        model_name,
-        base_url=base_url,
-        api_key=api_key,
-        env_type=env_type,
-        sampling_params=sampling_params,
-        extra_args=extra_args,
+def _make_installed_runner(agent_name: str, *, default_env_type: str):
+    runner = partial(_run_installed_agent, agent_name, env_type=default_env_type)
+    update_wrapper(runner, _run_installed_agent)
+    runner.__name__ = f"run_installed_{agent_name.replace('-', '_')}"
+    runner.__qualname__ = runner.__name__
+    signature = inspect.signature(_run_installed_agent)
+    parameters = []
+    for parameter in signature.parameters.values():
+        if parameter.name == "agent_name":
+            continue
+        if parameter.name == "env_type":
+            parameter = parameter.replace(default=default_env_type)
+        parameters.append(parameter)
+    runner.__signature__ = signature.replace(parameters=parameters)
+    runner.__doc__ = (
+        f"Run the {agent_name} installed agent for SWE "
+        f"(default env_type={default_env_type!r})."
     )
+    return runner
 
 
-def run_installed_qwen_code(
-    instance_id: str,
-    output_dir: str,
-    model_name: str,
-    base_url: str = None,
-    api_key: str = None,
-    env_type: str = "enroot",
-    sampling_params: Optional[object] = None,
-    extra_args: Dict[str, Any] = {},
-) -> Dict[str, Any]:
-    return _run_installed_agent(
-        "qwen-code",
-        instance_id,
-        output_dir,
-        model_name,
-        base_url=base_url,
-        api_key=api_key,
-        env_type=env_type,
-        sampling_params=sampling_params,
-        extra_args=extra_args,
-    )
-
-
-def run_installed_opencode(
-    instance_id: str,
-    output_dir: str,
-    model_name: str,
-    base_url: str = None,
-    api_key: str = None,
-    env_type: str = "enroot",
-    sampling_params: Optional[object] = None,
-    extra_args: Dict[str, Any] = {},
-) -> Dict[str, Any]:
-    return _run_installed_agent(
-        "opencode",
-        instance_id,
-        output_dir,
-        model_name,
-        base_url=base_url,
-        api_key=api_key,
-        env_type=env_type,
-        sampling_params=sampling_params,
-        extra_args=extra_args,
-    )
+run_installed_claude_code = _make_installed_runner(
+    "claude-code",
+    default_env_type="modal",
+)
+run_installed_qwen_code = _make_installed_runner(
+    "qwen-code",
+    default_env_type="modal",
+)
+run_installed_opencode = _make_installed_runner(
+    "opencode",
+    default_env_type="modal",
+)

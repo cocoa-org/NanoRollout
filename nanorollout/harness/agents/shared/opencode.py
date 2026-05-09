@@ -49,11 +49,21 @@ class OpenCode(InstalledAgentBase):
         return ". ~/.nvm/nvm.sh; opencode --version"
 
     def install(self, environment: ShellEnvironment) -> None:
-        self.exec(
+        self.ensure_tools_available(
             environment,
-            "apt-get update && apt-get install -y curl",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-            timeout_sec=self.install_timeout_sec,
+            required_tools=["curl", "bash"],
+            install_body=(
+                "if command -v apk >/dev/null 2>&1; then "
+                "  ${SUDO}apk add --no-cache curl bash; "
+                "elif command -v apt-get >/dev/null 2>&1; then "
+                "  ${SUDO}apt-get update && ${SUDO}apt-get install -y curl; "
+                "elif command -v yum >/dev/null 2>&1; then "
+                "  ${SUDO}yum install -y curl; "
+                "else "
+                '  echo "Missing required tools: $missing and no known package manager is available." >&2; '
+                "  exit 1; "
+                "fi"
+            ),
         )
         version_spec = f"@{self._version}" if self._version else "@latest"
         self.exec(
@@ -143,7 +153,7 @@ class OpenCode(InstalledAgentBase):
         *,
         timeout_sec: int | None = None,
     ) -> None:
-        escaped_instruction = shlex.quote(instruction)
+        escaped_instruction = shlex.quote(self.build_prompt(instruction))
         if not self.model_name or "/" not in self.model_name:
             raise ValueError("Model name must be in the format provider/model_name")
 
