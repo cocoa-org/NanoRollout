@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 _PWD_MARKER = "__TINYBREW_PWD__"
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MAX_MODAL_SANDBOX_NAME_LEN = 63
+_SANDBOX_RANDOM_SUFFIX_LEN = 8
 
 
 def _ensure_modal_symbols() -> None:
@@ -390,7 +392,17 @@ class ModalEnvironment(ShellEnvironment):
         safe_instance = re.sub(r"[^A-Za-z0-9_.-]+", "-", instance_id).strip("-")
         if not safe_instance:
             safe_instance = "task"
-        return f"tinybrew-{safe_instance}-{uuid.uuid4().hex[:8]}"
+        prefix = "tinybrew-"
+        max_instance_len = (
+            _MAX_MODAL_SANDBOX_NAME_LEN
+            - len(prefix)
+            - 1
+            - _SANDBOX_RANDOM_SUFFIX_LEN
+        )
+        if len(safe_instance) > max_instance_len:
+            digest = uuid.uuid5(uuid.NAMESPACE_URL, instance_id).hex[:8]
+            safe_instance = f"{safe_instance[:max_instance_len - 9]}-{digest}"
+        return f"{prefix}{safe_instance}-{uuid.uuid4().hex[:_SANDBOX_RANDOM_SUFFIX_LEN]}"
 
     @staticmethod
     def _run_async(coro: Any) -> Any:
