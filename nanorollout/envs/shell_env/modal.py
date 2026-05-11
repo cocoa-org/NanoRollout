@@ -13,34 +13,13 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .base import ExecutionResult, ShellEnvironment, extract_cwd_marker
 
-if TYPE_CHECKING:
-    from modal import App, Image, Sandbox
-else:
-    App = Image = Sandbox = Secret = Volume = None
+from modal import App, Image, Sandbox, Secret, Volume
+
 
 logger = logging.getLogger(__name__)
 
 _PWD_MARKER = "__NANOROLLOUT_PWD__"
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _ensure_modal_symbols() -> None:
-    global App, Image, Sandbox, Secret, Volume
-
-    if all(symbol is not None for symbol in (App, Image, Sandbox, Secret, Volume)):
-        return
-
-    from modal import App as ModalApp
-    from modal import Image as ModalImage
-    from modal import Sandbox as ModalSandbox
-    from modal import Secret as ModalSecret
-    from modal import Volume as ModalVolume
-
-    App = ModalApp
-    Image = ModalImage
-    Sandbox = ModalSandbox
-    Secret = ModalSecret
-    Volume = ModalVolume
 
 
 @dataclass
@@ -136,7 +115,6 @@ class ModalEnvironment(ShellEnvironment):
         self._run_async(self._start_async())
 
     async def _start_async(self) -> None:
-        _ensure_modal_symbols()
         self._image = self._build_image()
         assert App is not None
         assert Sandbox is not None
@@ -270,6 +248,30 @@ class ModalEnvironment(ShellEnvironment):
                         break
                     await remote_file.write.aio(chunk)
 
+    # Override write_file
+    def write_file(self, path: str, content: str) -> ExecutionResult:
+        if self._sandbox is None:
+            raise RuntimeError("Sandbox not started")
+        try:
+            self._run_async(self._write_file_async(path, content))
+        except Exception as exc:
+            return ExecutionResult(output=f"Error: {exc}", exit_code=1)
+        return ExecutionResult(output="", exit_code=0)
+
+    async def _write_file_async(self, path: str, content: str) -> None:
+        if self._sandbox is None:
+            raise RuntimeError("Sandbox not started")
+        parent = str(Path(path).parent)
+        if parent and parent != ".":
+            await self._exec_process_async(
+                f"mkdir -p {shlex.quote(parent)}",
+                timeout_sec=self.timeout,
+            )
+        data = content.encode("utf-8")
+        async with await self._sandbox.open.aio(path, "wb") as remote_file:
+            for i in range(0, len(data), 8192):
+                await remote_file.write.aio(data[i : i + 8192])
+
     def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         self._run_async(self._upload_dir_async(Path(source_dir), target_dir))
 
@@ -345,7 +347,6 @@ class ModalEnvironment(ShellEnvironment):
         )
 
     def _build_image(self) -> "Image":
-        _ensure_modal_symbols()
         assert Image is not None
         image_path = Path(self.config.image).expanduser()
         if image_path.exists():

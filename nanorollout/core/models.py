@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ResourceRequest(BaseModel):
@@ -28,8 +28,22 @@ class RunRequest(BaseModel):
     extra_args: dict[str, Any] | None = None
 
 
+class AgentMetrics(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    turns: int = 0
+    tool_calls: int = 0
+    model_query_time_sum: float = 0.0
+    env_execution_time_sum: float = 0.0
+    eval_time: float = 0.0
+    agent_run_time: float = 0.0
+    total_time: float = 0.0
+
+
 class RunResponse(BaseModel):
-    instance_id: str
+    reward: float
+    messages: list[dict[str, Any]] = Field(default_factory=list)
     exit_status: str = "unknown"
-    output_dir: str | None = None
-    error: str | None = None
+    agent_metrics: AgentMetrics = Field(default_factory=AgentMetrics)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    tools: list[dict[str, Any]] | None = None
