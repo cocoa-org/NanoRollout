@@ -67,6 +67,15 @@ For RL training, also fetch the `trainers/` submodule:
 git submodule update --init --recursive
 ```
 
+## Supported Agents
+
+| Domain | Benchmark | Harness (`--agent`) | Sandbox (`--env-type`) |
+|---|---|---|---|
+| SWE | SWE-Bench Verified / Pro | `oh-core` (OpenHands), `oh-lite`, `mini-swe-agent`, `r2egym`, `claude-code`, `qwen-code`, `opencode` | `docker`, `modal`, `enroot` |
+| Terminal | Terminal-Bench 2.0 | `terminus2`, `mini-swe-agent`, `claude-code`, `qwen-code`, `opencode` | `docker`, `modal`, `enroot` |
+| Computer Use | OSWorld-Verified | `qwen3vl-mmagents` | `aws`, `docker`, et al. |
+| Unified | CocoaBench | `cocoa-agent` | `docker`, `modal` |
+
 ## Quick Start
 
 ### `nro run` — Synchronous Rollout
@@ -119,3 +128,12 @@ curl -s http://localhost:11000/run \
 ```
 
 RL trainers (miles, veRL, tunix) call this endpoint to generate rollout batches during training. See [`examples/server/`](examples/server/) for multi-node Ray cluster setup.
+
+## Agent RL
+
+NanoRollout serves trajectories to RL trainers through the same `POST /run` endpoint. Start `nro serve` (see [Quick Start](#quick-start)) first, then point your trainer at `NANOROLLOUT_URL=http://<host>:11000`. We have validated integration with [miles](https://github.com/cocoa-org/miles), [veRL](https://github.com/verl-project/verl), and [tunix](https://github.com/google/tunix); veRL and tunix reference code is coming soon.
+
+### miles
+The [miles](https://github.com/cocoa-org/miles) side captures exact tokens and logprobs from agent calls via a TITO proxy so the trainer sees the same token stream the agent saw. See [`miles/examples/nanorollout`](https://github.com/cocoa-org/miles/tree/main/examples/nanorollout) for the launch script, hyperparameters, and full setup for an example to train Qwen3-4B-Instruct.
+
+
