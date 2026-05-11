@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Optional
 
 from .types import ToolResult
 
-GIT_USER_EMAIL = "evaluation@openhands.dev"
-GIT_USER_NAME = "OpenHands Evaluation"
+GIT_USER_EMAIL = "evaluation@nro.dev"
+GIT_USER_NAME = "NanoRollout Evaluation"
 GIT_COMMIT_MESSAGE = "patch"
 
 
@@ -836,8 +836,8 @@ class ShellEnvironment(ABC):
         """Write content to a file in the environment."""
         path_quoted = shlex.quote(path)
         cmd = (
-            f"cat > {path_quoted} << 'LITE_OPENHANDS_EOF_31415926'\n"
-            f"{content}\nLITE_OPENHANDS_EOF_31415926"
+            f"cat > {path_quoted} << 'NANOROLLOUT_EOF_31415926'\n"
+            f"{content}\nNANOROLLOUT_EOF_31415926"
         )
         return self.execute(cmd)
 

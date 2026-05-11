@@ -1,0 +1,3 @@
+[submodule "trainers/miles"]
+	path = trainers/miles
+	url = https://github.com/cocoa-org/miles.git

@@ -36,10 +36,10 @@ def build_output_dir(output_root: str, request: RunRequest) -> str:
     )
 
 
-def save_response(output_dir: str, response: RunResponse) -> None:
+def save_response(output_dir: str, instance_id: str, response: RunResponse) -> None:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    with open(output_path / f"{response.instance_id}.json", "w") as handle:
+    with open(output_path / f"{instance_id}.json", "w") as handle:
         json.dump(response.model_dump(), handle, indent=2)
 
 
@@ -49,11 +49,17 @@ def build_response(
     exit_status: str,
     error: str | None = None,
 ) -> RunResponse:
+    metadata: dict[str, Any] = {"output_dir": output_dir}
+    if error is not None:
+        metadata["error"] = error
+    if exit_status == "Timeout":
+        metadata["timed_out"] = True
+        metadata["task_timeout_s"] = request.task_timeout_s
     return RunResponse(
-        instance_id=request.instance_id,
+        reward=0.0,
+        messages=[],
         exit_status=exit_status,
-        output_dir=output_dir,
-        error=error,
+        metadata=metadata,
     )
 
 
@@ -63,21 +69,12 @@ def build_success_response(
     output_dir: str,
 ) -> RunResponse:
     if isinstance(result, RunResponse):
-        response = result.model_copy()
-        response.instance_id = request.instance_id
-        response.output_dir = response.output_dir or output_dir
-        return response
+        return result
 
     if not isinstance(result, dict):
         return build_response(request, output_dir, "Completed")
 
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    return build_response(
-        request=request,
-        output_dir=output_dir,
-        exit_status=str(result.get("exit_status") or "Completed"),
-        error=result.get("error") or metadata.get("error"),
-    )
+    return RunResponse.model_validate(result)
 
 
 def _run_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +169,7 @@ class LocalProcessRunner:
                     if response is None:
                         continue
                     active.remove(run)
-                    save_response(run.output_dir, response)
+                    save_response(run.output_dir, run.request.instance_id, response)
                     responses.append(response)
                     made_progress = True
 
@@ -246,12 +243,12 @@ class LocalProcessRunner:
                         if response is None:
                             continue
                         active.remove(run)
-                        save_response(run.output_dir, response)
+                        save_response(run.output_dir, run.request.instance_id, response)
                         responses.append(response)
                         progress.advance(task_id)
                         if response.exit_status.lower() == "timeout":
                             status_counts["timeout"] += 1
-                        elif response.error or response.exit_status.lower() == "error":
+                        elif response.metadata.get("error") or response.exit_status.lower() == "error":
                             status_counts["failed"] += 1
                         else:
                             status_counts["completed"] += 1

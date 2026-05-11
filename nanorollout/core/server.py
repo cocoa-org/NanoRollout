@@ -102,21 +102,12 @@ class NanoRolloutServer:
         self, body: RunRequest, result: Any, output_dir: str
     ) -> RunResponse:
         if isinstance(result, RunResponse):
-            response = result.model_copy()
-            response.instance_id = body.instance_id
-            response.output_dir = response.output_dir or output_dir
-            return response
+            return result
 
         if not isinstance(result, dict):
             return self._build_response(body, output_dir, "Completed")
 
-        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-        return self._build_response(
-            body=body,
-            output_dir=output_dir,
-            exit_status=str(result.get("exit_status") or "Completed"),
-            error=result.get("error") or metadata.get("error"),
-        )
+        return RunResponse.model_validate(result)
 
     def _build_response(
         self,
@@ -125,11 +116,17 @@ class NanoRolloutServer:
         exit_status: str,
         error: str | None = None,
     ) -> RunResponse:
+        metadata: dict[str, Any] = {"output_dir": output_dir}
+        if error is not None:
+            metadata["error"] = error
+        if exit_status == "Timeout":
+            metadata["timed_out"] = True
+            metadata["task_timeout_s"] = body.task_timeout_s
         return RunResponse(
-            instance_id=body.instance_id,
+            reward=0.0,
+            messages=[],
             exit_status=exit_status,
-            output_dir=output_dir,
-            error=error,
+            metadata=metadata,
         )
 
     def _save_result(self, output_dir: str, instance_id: str, response: RunResponse) -> None:
