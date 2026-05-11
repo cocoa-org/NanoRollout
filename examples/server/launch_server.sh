@@ -9,4 +9,4 @@ cd "$ROOT"
 
 ray start --head
 
-nro serve host=0.0.0.0 port=11000 "$@" | tee logs/server.log
+nro serve host=0.0.0.0 port=11000 "$@" 2>&1 | tee logs/server.log
