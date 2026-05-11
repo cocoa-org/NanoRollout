@@ -1,3 +1,6 @@
 [submodule "trainers/miles"]
 	path = trainers/miles
 	url = https://github.com/cocoa-org/miles.git
+[submodule "trainers/tunix"]
+	path = trainers/tunix
+	url = https://github.com/cocoa-org/tunix.git
