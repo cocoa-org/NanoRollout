@@ -1,0 +1,118 @@
+// Worker daemon gRPC service for the GCE shell environment.
+//
+// One daemon per VM, one active container per worker. Invoked by
+// PoolCoordinator on the client side via insecure_channel over a
+// VPC-internal network.
+syntax = "proto3";
+
+// NOTE: package name kept as-is for compatibility with existing
+// generated worker_pb2.py / worker_pb2_grpc.py.
+package tunix.tinyflow.worker;
+
+// -------- service --------
+
+service WorkerService {
+  // Container lifecycle.
+  rpc StartContainer(StartContainerRequest) returns (StartContainerResponse);
+  rpc StopContainer(StopContainerRequest) returns (Empty);
+
+  // Execution. Streaming so long-running bash output flows in real time
+  // and the client can apply per-chunk timeouts without buffering whole
+  // stdout in worker memory.
+  rpc Exec(ExecRequest) returns (stream ExecChunk);
+
+  // File ops. Used to upload patches / read evaluation output / inspect
+  // container filesystem.
+  rpc WriteFile(WriteFileRequest) returns (Empty);
+  rpc ReadFile(ReadFileRequest) returns (FileContent);
+  rpc ListDir(ListDirRequest) returns (DirListing);
+
+  // Health & lifecycle.
+  rpc HealthCheck(Empty) returns (HealthStatus);
+  // ReleaseAll stops every active container; called by the pool coordinator
+  // when a worker is being returned to the idle pool.
+  rpc ReleaseAll(Empty) returns (Empty);
+}
+
+// -------- common --------
+
+message Empty {}
+
+// -------- container lifecycle --------
+
+message StartContainerRequest {
+  string image = 1;            // Docker image reference (registry path or local tag).
+  string work_dir = 2;         // Working directory inside the container, e.g. /testbed.
+  map<string, string> env_vars = 3;
+  int32 cpu_limit = 4;         // CPU quota in whole CPUs (0 means unconstrained).
+  int32 memory_limit_mb = 5;   // Memory cap in MiB (0 means unconstrained).
+}
+
+message StartContainerResponse {
+  string container_id = 1;     // Docker container short id; opaque to the client.
+}
+
+message StopContainerRequest {
+  string container_id = 1;
+}
+
+// -------- execution --------
+
+message ExecRequest {
+  string container_id = 1;
+  string cmd = 2;
+  int32 timeout_sec = 3;       // 0 means use server default.
+}
+
+message ExecChunk {
+  enum Stream {
+    STDOUT = 0;
+    STDERR = 1;
+    EXIT = 2;
+  }
+  Stream stream = 1;
+  bytes data = 2;              // Populated for STDOUT/STDERR.
+  int32 exit_code = 3;         // Populated only when stream = EXIT.
+}
+
+// -------- file ops --------
+
+message WriteFileRequest {
+  string container_id = 1;
+  string path = 2;             // Absolute path inside the container.
+  bytes content = 3;
+  int32 mode = 4;              // POSIX file mode (octal). 0 means default 0o644.
+}
+
+message ReadFileRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message FileContent {
+  bytes content = 1;
+  int64 size = 2;
+}
+
+message ListDirRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message DirEntry {
+  string name = 1;
+  bool is_dir = 2;
+  int64 size = 3;              // 0 for directories.
+}
+
+message DirListing {
+  repeated DirEntry entries = 1;
+}
+
+// -------- health --------
+
+message HealthStatus {
+  bool healthy = 1;
+  int32 active_containers = 2;
+  string version = 3;          // worker daemon version string.
+}
