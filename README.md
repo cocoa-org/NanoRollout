@@ -17,7 +17,7 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> |
   <a href="#agent-rl">Agent RL</a> |
-  <a href="https://ember-factory-33d.notion.site/NanoRollout-A-Lightweight-Infra-for-Digital-Agent-Rollout-at-Scale-312927eea9bd803792f4c3b954f8daa1?pvs=74">Blog</a> |
+  <a href="https://cocoa-org.notion.site/nanorollout">Blog</a> |
   <a href="https://huggingface.co/cocoa-org">Huggingface</a> |
   <a href="https://wandb.ai/tinyagent-org/nanorollout_rl">Wandb</a>
 </p>
