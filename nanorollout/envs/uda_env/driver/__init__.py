@@ -33,6 +33,7 @@ from typing import Dict
 
 from .base import BenchDriver, discover_workspace_assets
 from .cocoa_v1 import CocoaV1Driver
+from .osworld_v1 import OSWorldV1Driver
 from .wildclaw_v1 import WildclawV1Driver
 
 __all__ = [
@@ -56,6 +57,7 @@ def register_driver(driver: BenchDriver) -> None:
 # Built-in drivers
 register_driver(CocoaV1Driver())
 register_driver(WildclawV1Driver())
+register_driver(OSWorldV1Driver())
 
 
 def load_driver(name: str) -> BenchDriver:

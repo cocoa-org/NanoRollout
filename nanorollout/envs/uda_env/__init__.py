@@ -200,6 +200,13 @@ class TaskExecutor:
             # ``browser`` accepted as a legacy alias for cocoa configs.
             self.sandbox_client = ComputerUseSandboxClient(sandbox_config=sandbox_config)
             logger.info("Using ComputerUseSandboxClient (GUI-only via /v1/computer-use/*)")
+        elif client_type in ("osworld-v1", "osworld_v1"):
+            # OSWorld VM (EC2-backed AMI); not a uda-desktop runtime. The
+            # adapter translates the 17 computer_use_* actions onto OSWorld's
+            # pyautogui-over-HTTP surface.
+            from .runtime_adapter import load_adapter
+            self.sandbox_client = load_adapter("osworld-v1", sandbox_config)
+            logger.info("Using OSWorldV1Adapter (RuntimeAdapter, AWS-backed OSWorld VM)")
         else:
             # Default to UnifiedSandboxClient for "shell" or unknown types
             # UnifiedSandboxClient supports all tools including shell
