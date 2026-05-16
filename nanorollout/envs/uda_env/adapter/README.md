@@ -14,35 +14,60 @@ load time.
 ```
 nanorollout/envs/uda_env/adapter/
 ├── README.md                           # this file
+├── PROTOCOL.md                         # bench-driver contract (read first if adding a bench)
 ├── __init__.py                         # exposes ADAPTER_ROOT
 ├── cocoa-v1/                           # 153 tasks from cocoabench-v1.0
-│   ├── _migration_meta.json
-│   ├── <task-id>/
-│   │   ├── Dockerfile                  # FROM ghcr.io/bowenbryanwang/uda-desktop:<tag>
-│   │   ├── docker-compose.yaml         # ${TASK_DOCKER_IMAGE_NAME} + ${HOST_PORT}:8080
-│   │   ├── task.yaml(.enc)             # agent prompt
-│   │   ├── test.py(.enc)               # verifier (test(result) -> dict)
-│   │   ├── canary.txt                  # decryption salt
-│   │   └── assets/                     # optional fixture files
-│   └── ...
+│   └── <task-id>/
+│       ├── meta.json                   # {id, name, category, timeout_seconds, driver}
+│       ├── Dockerfile / docker-compose.yaml
+│       ├── task.yaml.enc / test.py.enc / canary.txt
+│       └── assets/                     # (optional, fixture files baked into image)
+├── wildclaw-v1/                        # 60 tasks from InternLM/WildClawBench
+│   ├── TASK_STATUS.md                  # per-task data-source classification
+│   └── <task-id>/
+│       ├── meta.json
+│       ├── Dockerfile / docker-compose.yaml
+│       ├── task.yaml / grade.py / env.tsv / warmup.sh
+│       ├── exec/                       # (optional) inputs copied to /tmp_workspace/
+│       ├── gt/                         # (optional) injected post-rollout
+│       └── skills/                     # (optional)
 ├── osworld-v2/                         # (TODO) the ~66% CLI-bypassable subset
 └── swe-bench-mm/                       # (TODO) 612 frontend bug fixes
 ```
 
-## Per-task schema
+## Per-task schema (unified across benchmarks)
 
-Every task subdirectory follows the same on-disk layout, regardless of
-the source benchmark. This is intentional so that one rollout runner
-(`nro run --task uda --agent <bench>`) can consume them all uniformly.
+The on-disk layout is **a convention, not a strict contract**. Files
+that don't apply to a given benchmark are simply absent. Runtime
+divergence is handled by per-bench drivers
+(see [`PROTOCOL.md`](PROTOCOL.md)).
 
-| File | Required | Purpose |
-|---|---|---|
-| `Dockerfile` | yes | Thin overlay on `uda-desktop`. Base image pinned by the migrator. |
-| `docker-compose.yaml` | yes | Builds + runs the Dockerfile, maps `${HOST_PORT}:8080`. |
-| `task.yaml` or `task.yaml.enc` | yes | Agent instruction (top-level key: `instruction`). |
-| `test.py` or `test.py.enc` | yes | Verifier exporting `test(result: dict) -> {"passed": bool, "feedback": str, "details": dict}`. |
-| `canary.txt` | iff encrypted | Per-task salt for the decryption helper. |
-| `assets/` | no | Static fixture files copied at build time. |
+| File / dir | cocoa-v1 | wildclaw-v1 | Purpose |
+|---|---|---|---|
+| `meta.json` | optional | required | `{id, name, category, timeout_seconds, driver}` — `driver` field routes to the correct `BenchDriver`. |
+| `Dockerfile` | required | required | Thin overlay on `uda-desktop`. |
+| `docker-compose.yaml` | required | required | Builds + runs the Dockerfile, maps `${HOST_PORT}:8080`. |
+| `task.yaml(.enc)` | encrypted | plaintext | Agent instruction (top-level key: `instruction`). |
+| `test.py.enc` | required | n/a | Host-side verifier (`test(result) -> dict`). |
+| `grade.py` | n/a | required | In-container verifier (`grade() -> dict`); runs against `/tmp_workspace/{results,gt}`. |
+| `canary.txt` | required | n/a | XOR key for `*.enc`. |
+| `env.tsv` | n/a | required | Env var names to pass through. |
+| `warmup.sh` | n/a | required | Post-build, in-container setup script. |
+| `exec/` | n/a | optional | Inputs copied into `/tmp_workspace/<name>` at rollout start. |
+| `gt/` | n/a | optional | Ground truth `docker cp`-ed into `/tmp_workspace/gt/` *after* the agent stops. |
+| `skills/` | n/a | optional | Skill packages baked into image at `/home/kasm-user/skills`. |
+
+## Adding a new benchmark
+
+1. Write `uda_env/driver/<bench>.py` implementing the `BenchDriver`
+   protocol (see [`PROTOCOL.md`](PROTOCOL.md)).
+2. Register it in `uda_env/driver/__init__.py`.
+3. Drop the task corpus under `adapter/<bench>/<task-id>/` with whatever
+   subset of the unified schema your driver needs. Each `meta.json`
+   must carry a `driver` field naming the new driver.
+4. Done — `nro run --task uda --agent uda-agent --bench <bench>
+   --instance-id <id>` picks up the right driver automatically via
+   `load_driver_for_task_dir(task_dir)`.
 
 ## What the migrator changes vs. preserves
 

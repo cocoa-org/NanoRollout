@@ -1,0 +1,8 @@
+instruction: |
+  工作目录 `/tmp_workspace/` 中有一段英语演讲视频 `/tmp_workspace/recording.mp4`。
+
+  请将该视频前两分钟的英语内容翻译并配音为中文。将英文转录、中文翻译、配音视频分别输出为 `/tmp_workspace/results/transcript_en.txt`、`/tmp_workspace/results/transcript_zh.txt`、`/tmp_workspace/results/output.mp4 (仅两分钟)`。
+
+  配音视频保持原始画面，仅替换音轨。
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

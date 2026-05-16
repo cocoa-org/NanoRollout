@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import time
 from contextlib import contextmanager
@@ -31,7 +32,74 @@ DEFAULT_BENCH = "cocoa-v1"
 # Currently-shipped UDA benchmark adapters. New entries should follow the
 # CocoaBench-shaped on-disk schema (Dockerfile + docker-compose.yaml +
 # task.yaml(.enc) + test.py(.enc) + canary.txt) so this runner can load them.
-SUPPORTED_BENCHES = ("cocoa-v1",)
+# osworld-v1 is the exception: it ships no per-task schema, reading its
+# corpus straight from ``examples/eval/osworld/data/`` via OSWorldV1Driver.
+SUPPORTED_BENCHES = ("cocoa-v1", "wildclaw-v1", "osworld-v1")
+
+# Benches whose tasks are .json files at custom paths rather than directories
+# under ``adapter/<bench>/<id>/``. ``_resolve_task_root`` and ``_load_task``
+# special-case these.
+_FILE_BACKED_BENCHES = frozenset({"osworld-v1"})
+
+
+def _find_repo_root(start: Path) -> Optional[Path]:
+    """Walk upward from ``start`` looking for the repository root.
+
+    Identified by the presence of both ``nanorollout/`` and ``examples/``.
+    Used by the osworld-v1 task resolver to locate the bundled OSWorld
+    corpus under ``examples/eval/osworld/data/``.
+    """
+    for parent in [start, *start.parents]:
+        if (parent / "nanorollout").is_dir() and (parent / "examples").is_dir():
+            return parent
+    return None
+
+
+def _resolve_osworld_v1_task(instance_id: str, extra_args: dict[str, Any]) -> Path:
+    """Locate an OSWorld v1 task JSON inside the bundled data dir.
+
+    Resolution order:
+
+    1. ``extra_args["osworld_data_root"]`` (explicit override).
+    2. ``$OSWORLD_ROOT`` env var.
+    3. ``<repo_root>/examples/eval/osworld/data`` (default bundled corpus).
+
+    The data dir must contain ``test_all.json`` mapping ``<domain>``->``[<id>]``
+    plus ``examples/<domain>/<id>.json`` files (OSWorld v1 layout, byte-identical
+    to upstream xlang-ai/OSWorld).
+    """
+    explicit = extra_args.get("osworld_data_root") or os.getenv("OSWORLD_ROOT")
+    if explicit:
+        data_root = Path(explicit).expanduser().resolve()
+    else:
+        repo_root = _find_repo_root(Path(__file__).resolve())
+        if repo_root is None:
+            raise FileNotFoundError(
+                "osworld-v1: cannot locate repo root; set extra_args['osworld_data_root'] "
+                "or $OSWORLD_ROOT to the OSWorld data dir (with test_all.json)."
+            )
+        data_root = repo_root / "examples" / "eval" / "osworld" / "data"
+
+    test_all = data_root / "test_all.json"
+    if not test_all.is_file():
+        raise FileNotFoundError(
+            f"osworld-v1: missing {test_all}. Set $OSWORLD_ROOT or "
+            "extra_args['osworld_data_root']."
+        )
+
+    index = json.loads(test_all.read_text(encoding="utf-8"))
+    if not isinstance(index, dict):
+        raise ValueError(f"osworld-v1: {test_all} must be a JSON object")
+    for domain, ids in index.items():
+        if instance_id in ids:
+            task_path = data_root / "examples" / domain / f"{instance_id}.json"
+            if not task_path.is_file():
+                raise FileNotFoundError(
+                    f"osworld-v1: indexed task {instance_id} (domain={domain}) "
+                    f"is missing its JSON at {task_path}."
+                )
+            return task_path
+    raise ValueError(f"osworld-v1: task {instance_id!r} not found in {test_all}")
 
 
 def _ensure_logging(level: int = logging.INFO) -> None:
@@ -148,6 +216,14 @@ def _resolve_task_root(
     2. ``ADAPTER_ROOT / <bench>`` (package-shipped corpus), where ``bench``
        comes from ``--bench`` / ``extra_args["bench"]`` / ``DEFAULT_BENCH``.
     """
+    resolved_bench = _resolve_bench(bench, extra_args)
+
+    # osworld-v1 reads its corpus straight from ``examples/eval/osworld/data/``,
+    # not from any per-task subdir under ``adapter/<bench>/<id>/``.
+    if resolved_bench in _FILE_BACKED_BENCHES:
+        task_path = _resolve_osworld_v1_task(instance_id, extra_args)
+        return task_path.parent, task_path
+
     configured = extra_args.get("tasks_dir") or extra_args.get("uda_tasks_dir")
     if configured:
         root = Path(configured).expanduser().resolve()
@@ -160,7 +236,6 @@ def _resolve_task_root(
             f"Task {instance_id!r} not found under configured tasks_dir {root}"
         )
 
-    resolved_bench = _resolve_bench(bench, extra_args)
     task_root = (ADAPTER_ROOT / resolved_bench).resolve()
     if not task_root.is_dir():
         candidates = sorted(p.name for p in ADAPTER_ROOT.iterdir() if p.is_dir())
@@ -183,39 +258,35 @@ def _resolve_task_root(
 
 
 def _detect_encrypted_task(task_dir: Path) -> bool:
+    if task_dir.is_file():
+        return False
     return (task_dir / "task.yaml.enc").is_file() and not (task_dir / "task.yaml").is_file()
 
 
 def _load_task(task_dir: Path, use_encrypted: bool) -> dict[str, Any]:
-    if use_encrypted:
-        from nanorollout.envs.uda_env.decrypt import (
-            decrypt_file_to_memory,
-            read_canary,
-        )
+    """Load a task via the per-bench driver.
 
-        task_file = task_dir / "task.yaml.enc"
-        canary = read_canary(task_dir)
-        if canary is None:
-            raise ValueError(f"No canary.txt found in {task_dir}")
-        task_yaml = decrypt_file_to_memory(task_file, canary)
-        task_data = yaml.safe_load(task_yaml)
-        test_file = task_dir / "test.py.enc"
+    ``use_encrypted`` is retained for backward compatibility but is ignored —
+    encryption is now an attribute of the cocoa-v1 driver, inferred from the
+    task directory's contents (presence of ``task.yaml.enc`` + ``canary.txt``).
+
+    File-backed benches (osworld-v1) pass a ``.json`` path directly; the
+    OSWorldV1Driver knows how to load it.
+    """
+    from nanorollout.envs.uda_env.driver import (
+        load_driver,
+        load_driver_for_task_dir,
+    )
+
+    if task_dir.is_file() and task_dir.suffix == ".json":
+        # osworld-v1 contract: task config is a single JSON file.
+        driver = load_driver("osworld-v1")
     else:
-        task_file = task_dir / "task.yaml"
-        with open(task_file, encoding="utf-8") as handle:
-            task_data = yaml.safe_load(handle)
-        test_file = task_dir / "test.py"
-
-    if task_data is None:
-        raise ValueError(f"Empty task definition in {task_file}")
-    if not isinstance(task_data, dict):
-        raise ValueError(f"Task definition in {task_file} must be a mapping")
-
-    task = dict(task_data)
-    task["task_dir"] = str(task_dir)
-    task["task_name"] = task_dir.name
-    task["test_file_path"] = str(test_file) if test_file.exists() else None
-    task["use_encrypted"] = use_encrypted
+        driver = load_driver_for_task_dir(task_dir)
+    task = driver.load_task(task_dir)
+    # Keep the legacy key around for any caller that still reads it; cocoa
+    # driver populates it from its own logic.
+    task.setdefault("use_encrypted", task.get("use_encrypted", use_encrypted))
     return task
 
 
@@ -292,8 +363,27 @@ def _build_uda_config(
 
     sandbox = dict(base_config.get("sandbox") or {})
     sandbox.update(_normalize_object(extra_args.get("sandbox_config")))
-    client_type = extra_args.get("client_type") or sandbox.get("client_type", "unified")
+    resolved_bench = (extra_args.get("bench") or "").strip().lower()
+    default_client_type = "osworld-v1" if resolved_bench == "osworld-v1" else "unified"
+    client_type = extra_args.get("client_type") or sandbox.get("client_type", default_client_type)
     runtime_type = extra_args.get("runtime_type") or env_type or sandbox.get("runtime_type", "docker")
+
+    # osworld-v1: map env_type / region into the adapter's namespace. The
+    # adapter doesn't use the docker/modal runtime layer at all.
+    if client_type in ("osworld-v1", "osworld_v1"):
+        sandbox.setdefault("osworld_provider", env_type or sandbox.get("osworld_provider") or "aws")
+        if "region" in extra_args:
+            sandbox.setdefault("osworld_region", extra_args["region"])
+        if "screen_width" in extra_args and "screen_height" in extra_args:
+            sandbox.setdefault(
+                "screen_size",
+                [int(extra_args["screen_width"]), int(extra_args["screen_height"])],
+            )
+        if "agent_view_width" in extra_args and "agent_view_height" in extra_args:
+            sandbox.setdefault(
+                "agent_view_size",
+                [int(extra_args["agent_view_width"]), int(extra_args["agent_view_height"])],
+            )
     max_iterations = extra_args.get("max_iterations")
     if max_iterations is None:
         max_iterations = sandbox.get("max_iterations", 100)

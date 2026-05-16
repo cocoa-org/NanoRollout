@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-02-code-intelligence-task-12
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./input:/tmp_workspace/input:ro
+      - ./results:/tmp_workspace/results
+      - ./gt:/tmp_workspace/gt:ro
+    working_dir: /tmp_workspace

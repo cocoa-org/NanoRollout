@@ -1,0 +1,13 @@
+instruction: |
+  你是一名 AI 调试专家。在 `/tmp_workspace` 目录下有一个 **SAM3**（Segment Anything Model 3）的代码库以及一个推理测试脚本 `test_sam3.py`。但是现在代码里好像有一些 Bug 导致推理结果不正确，我需要你定位并修复所有被注入的 Bug，使测试脚本能产生正确的推理结果。
+
+  **Python 环境**: `~/miniconda3/envs/eval`
+
+  ### 工作流程
+
+  1. 先运行测试脚本观察当前异常输出：
+  2. 分析 `/tmp_workspace/predictions.json` 中的检测结果，定位并修复所有 Bug
+  3. 重新运行测试，确保结果正确
+  4. 将最终的 `predictions.json` 保存到 `/tmp_workspace/results/predictions.json`
+
+  **注意：** 不要修改 `test_sam3.py`。

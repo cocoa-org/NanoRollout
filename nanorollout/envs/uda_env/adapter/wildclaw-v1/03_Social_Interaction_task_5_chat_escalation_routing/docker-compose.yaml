@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  uda-task:
+    build: .
+    container_name: wildclaw-03-social-interaction-task-5
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL}
+      JUDGE_MODEL: ${JUDGE_MODEL:-openai/gpt-5.4}
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    networks:
+      - default

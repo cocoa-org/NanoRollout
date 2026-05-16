@@ -1,0 +1,41 @@
+instruction: |
+  请访问 `https://scp-wiki.wikidot.com/`，抓取编号 `001` 到 `050` 的 SCP 条目页面，并将结果保存到本地。
+
+  输出要求如下：
+
+  1. 创建目录 `/tmp_workspace/results/`。
+  2. 对于每个条目 `SCP-001` 到 `SCP-050`，创建对应子目录：
+     - `/tmp_workspace/results/scp-001/`
+     - `/tmp_workspace/results/scp-002/`
+     - ...
+     - `/tmp_workspace/results/scp-050/`
+  3. 对每个条目，将该页面的正文文本部分保存到：
+     - `/tmp_workspace/results/scp-XXX/text.md`
+  4. 对每个条目，将该页面正文中的图片内容另存为：
+     - `/tmp_workspace/results/scp-XXX/1.jpg`
+     - `/tmp_workspace/results/scp-XXX/2.jpg`
+     - ...
+  5. 如果某个页面正文中没有图片，也仍然要创建对应目录和 `text.md`，只是不要创建图片文件。
+  6. 同时，将所有条目的统计结果保存为一个 JSONL 文件：
+     - `/tmp_workspace/results/summary.jsonl`
+  7. `/tmp_workspace/results/summary.jsonl` 中每行对应一个条目，格式如下：
+
+  ```python
+  {
+      "item": "SCP-010",
+      "class": "Safe",
+      "n_mask": 1
+  }
+  # This is just a Python dict for illustration; actual file must be JSONL
+  ```
+
+  补充规则：
+
+  1. `class` 字段规则如下：
+     - 页面有标准 `Object Class` 时，使用它。
+     - 如果没有 `Object Class` 但有 `Containment Class`，使用 `Containment Class`。
+     - 如果两者都没有，写 `"Unknown"`。
+  2. `n_mask` 表示正文中的逻辑隐藏块数量。每个可折叠/可展开块只计数一次。
+  3. 统计 `n_mask` 时，如果正文中的 Licensing / Citation 区块本身也是折叠块，也要计入。
+  4. 图片只统计正文中的条目图片，不要把站点导航图标、头像、社交媒体图标等页面装饰性图片算进去。
+  5. `text.md` 需要保留页面主要正文内容；格式可以是 markdown 或纯文本，但不能只写摘要，也不能只保存很小一段内容。

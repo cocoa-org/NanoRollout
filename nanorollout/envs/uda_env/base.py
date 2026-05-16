@@ -24,6 +24,7 @@ import io
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
@@ -40,7 +41,17 @@ COMPUTER_USE_ACTION_PREFIX = "computer_use_"
 
 
 class BaseSandboxRuntime:
-    """Lifecycle manager for a sandbox runtime backend."""
+    """Lifecycle manager for a sandbox runtime backend.
+
+    Concrete backends (docker, modal) need only implement ``start`` and
+    ``cleanup``. The cross-runtime data primitives — pushing files into
+    the container and running shell commands — have a default impl here
+    that goes through the agent-infra/sandbox SDK's HTTP surface
+    (``/v1/file``, ``/v1/shell``). That surface is exposed identically
+    by both runtimes (docker forwards ``:8080`` to localhost; modal
+    tunnels it). Per-runtime subclasses are free to override with a
+    faster native path (docker uses ``docker cp``).
+    """
 
     runtime_type = "base"
 
@@ -56,8 +67,122 @@ class BaseSandboxRuntime:
         raise NotImplementedError
 
     def copy_to_runtime(self, host_path: str, container_path: str) -> bool:
-        """Copy a file or directory from host to runtime."""
-        raise NotImplementedError
+        """Copy a file or directory from host into the container.
+
+        Default impl: walk ``host_path`` and ``sdk_client.file.write_file``
+        each file in turn. Directories are created implicitly. Returns
+        False on any failure. Override for faster native transports.
+        """
+        host = Path(host_path)
+        if not host.exists():
+            runtime_logger.error("copy_to_runtime: source missing: %s", host)
+            return False
+        sdk = self._ensure_sdk_client()
+        if sdk is None:
+            runtime_logger.error(
+                "copy_to_runtime: could not initialize sdk_client on %s",
+                type(self.client).__name__,
+            )
+            return False
+        try:
+            if host.is_file():
+                self._write_single_file(sdk, host, container_path)
+            else:
+                # Mirror the directory tree at container_path.
+                base = host.resolve()
+                for src in host.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    rel = src.resolve().relative_to(base).as_posix()
+                    dest = f"{container_path.rstrip('/')}/{rel}"
+                    self._write_single_file(sdk, src, dest)
+            return True
+        except Exception as exc:
+            runtime_logger.error(
+                "copy_to_runtime failed (%s -> %s): %s", host, container_path, exc
+            )
+            return False
+
+    def _ensure_sdk_client(self):
+        """Lazily initialise the agent-infra/sandbox SDK client.
+
+        Driver hooks (``setup_workspace``, ``run_warmup``) run BEFORE the
+        agent rollout starts, which is when ``get_feedback`` would
+        otherwise trigger ``_initialize_sdk_client``. Without this lazy
+        init, the SDK-mediated default ``copy_to_runtime`` /
+        ``exec_in_runtime`` calls would crash on modal (docker has its
+        own native ``docker cp`` override and doesn't hit this path).
+        """
+        client = self.client
+        init_fn = getattr(client, "_initialize_sdk_client", None)
+        if init_fn is not None and getattr(client, "sdk_client", None) is None:
+            try:
+                init_fn()
+            except Exception as exc:
+                runtime_logger.error("sdk_client lazy init failed: %s", exc)
+                return None
+        return getattr(client, "sdk_client", None)
+
+    @staticmethod
+    def _write_single_file(sdk, src: "Path", dest: str) -> None:
+        """SDK-mediated single-file write into the container."""
+        with open(src, "rb") as fh:
+            data = fh.read()
+        # The agent-infra sandbox accepts text or base64-encoded bytes
+        # depending on SDK version; use bytes when available, else base64.
+        try:
+            sdk.file.write_file(file=dest, content=data)
+        except TypeError:
+            sdk.file.write_file(file=dest, content=base64.b64encode(data).decode("ascii"))
+
+    def exec_in_runtime(
+        self,
+        command: str,
+        *,
+        workdir: Optional[str] = None,
+        timeout: int = 600,
+        env: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Run a shell command inside the container.
+
+        Returns ``{"output": str, "returncode": int}``. The returncode
+        is best-effort — the SDK only surfaces stdout text for some
+        backends, so non-zero is inferred from the absence of output +
+        any thrown SDK exception.
+
+        ``env`` is inline-prefixed bash-style (``K1='v1' K2='v2' cmd``)
+        so the command sees those env vars regardless of whether the
+        underlying shell session inherits them. Values are shell-quoted.
+
+        Default impl uses ``sdk_client.shell.exec_command`` so it works
+        identically on docker (port-forwarded :8080) and modal (tunnel).
+        """
+        sdk = self._ensure_sdk_client()
+        if sdk is None:
+            return {
+                "output": "",
+                "returncode": -1,
+                "error": "could not initialize sdk_client on runtime client",
+            }
+        if env:
+            import shlex as _shlex
+            prefix = " ".join(f"{k}={_shlex.quote(str(v))}" for k, v in env.items())
+            command = f"{prefix} {command}"
+        try:
+            session = sdk.shell.create_session(exec_dir=workdir or UDA_WORKSPACE)
+            session_id = session.data.session_id
+            result = sdk.shell.exec_command(
+                command=command,
+                id=session_id,
+                exec_dir=workdir or UDA_WORKSPACE,
+                async_mode=False,
+                timeout=int(timeout),
+            )
+            output = getattr(result.data, "output", "") or ""
+            return {"output": output, "returncode": 0}
+        except Exception as exc:
+            runtime_logger.error("exec_in_runtime failed: %s", exc)
+            return {"output": "", "returncode": -1, "error": str(exc)}
 
     def metadata(self) -> Dict[str, Any]:
         """Return provider-specific runtime metadata."""

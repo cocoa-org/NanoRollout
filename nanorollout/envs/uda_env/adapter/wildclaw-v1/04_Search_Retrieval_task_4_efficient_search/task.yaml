@@ -1,0 +1,49 @@
+instruction: |
+  Question: 
+  From which Python version was `pathlib.Path.walk()` added to the standard library?
+  Please further determine: what is the CPython GitHub Pull Request number that merged it?
+  Please provide the final answer and output a complete evidence chain proving your conclusion.
+
+  Mandatory Requirements:
+
+  1. The total number of searches must not exceed 4.
+
+  2. The answer may only be based on publicly searchable webpages.
+
+  3. The answer must explicitly state:
+      (1) the total number of searches performed;
+      (2) the query used for each search.
+
+  4. A complete evidence chain must be provided.
+
+  5. If the answer cannot be confirmed within the search budget, the task must be terminated, and you must explicitly state “Unable to confirm.” Do not guess.
+
+  6. Write your results into `/tmp_workspace/results/results.md`.
+
+  Output Format (Please strictly follow the format below):
+  ```
+  Total number of searches: <number>
+
+  Search 1: <query>
+  Finding: <one-sentence summary>
+
+  Search 2: <query>
+  Finding: <one-sentence summary>
+
+  ...
+
+  Final Answer:
+
+  First introduced in version: <version>
+
+  Corresponding PR: <PR number>
+
+  Evidence Chain:
+
+  <Evidence 1: page title + key conclusion + URL>
+
+  <Evidence 2: page title + key conclusion + URL>
+
+  Reasoning:
+  <Use 3–5 sentences to explain why these pieces of evidence are sufficient to support the final answer>
+  ```

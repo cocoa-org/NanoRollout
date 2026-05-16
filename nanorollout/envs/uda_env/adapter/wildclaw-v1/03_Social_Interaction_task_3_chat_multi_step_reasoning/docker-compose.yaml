@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-03-social-interaction-task-3
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL:-openai/gpt-5.4}
+    volumes:
+      - ./results:/tmp_workspace/results
+    ports:
+      - "9110:9110"
+    networks:
+      - wildclaw-net
+
+networks:
+  wildclaw-net:
+    driver: bridge

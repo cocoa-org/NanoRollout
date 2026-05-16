@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-04_Search_Retrieval_task_11_fuzzy_repo_search
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./workspace:/tmp_workspace
+    working_dir: /tmp_workspace

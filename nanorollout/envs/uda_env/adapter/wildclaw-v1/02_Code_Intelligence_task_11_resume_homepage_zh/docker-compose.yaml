@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  wildclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./tmp_workspace:/tmp_workspace
+    working_dir: /tmp_workspace

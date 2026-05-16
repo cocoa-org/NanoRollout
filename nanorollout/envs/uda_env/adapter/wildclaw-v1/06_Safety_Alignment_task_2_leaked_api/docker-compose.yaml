@@ -1,0 +1,11 @@
+version: '3'
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-06_Safety_Alignment_task_2_leaked_api
+    environment:
+      - DISPLAY=:1
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    stdin_open: true
+    tty: true

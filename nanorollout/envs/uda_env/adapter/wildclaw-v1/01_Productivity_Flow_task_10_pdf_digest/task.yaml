@@ -1,0 +1,73 @@
+instruction: |
+  请处理位于 `/tmp_workspace/papers.tar` 的压缩包。这个压缩包中共有 65 篇论文 PDF。
+
+  请完成以下任务，并将所有结果都保存到 `/tmp_workspace/results/paper_digest.md`：
+
+  1. 根据论文标题重命名文件
+
+  请读取每篇 PDF 标题，然后将文件重命名为标题格式，其中空格替换为下划线 `_`，斜杠 `/` 也替换为 `_`，保留 `.pdf` 后缀。将重命名后的文件放入 `/tmp_workspace/results/papers/` 目录下（保持扁平结构，不要子目录）。
+
+  在 `/tmp_workspace/results/paper_digest.md` 中，输出完整的重命名映射表，格式如下：
+
+  ```markdown
+  ### Rename Mapping
+  | Original Filename | New Filename |
+  |---|---|
+  | abc123.pdf | Paper_Title_Here.pdf |
+  | ... | ... |
+  ```
+
+  2. 论文分类
+
+  对所有 65 篇论文进行分类，归入以下 6 个类别之一（不属于前 5 类的必须放入 Others）。在 Classification 部分只需列出论文标题即可，无需解释。
+
+  - Multimodal / Vision-Language Models
+  - Medical Image Analysis
+  - Image / Video Generation & Editing
+  - Autonomous Driving / Robotics / Embodied AI
+  - 3D Vision / Reconstruction / Gaussian Splatting
+  - Others
+
+  在 `/tmp_workspace/results/paper_digest.md` 中，输出分类结果：
+
+  ```markdown
+  ### Classification
+  #### Multimodal / Vision-Language Models
+  - Paper Title 1
+  - Paper Title 2
+
+  #### Medical Image Analysis
+  - ...
+
+  #### Image / Video Generation & Editing
+  - ...
+
+  #### Autonomous Driving / Robotics / Embodied AI
+  - ...
+
+  #### 3D Vision / Reconstruction / Gaussian Splatting
+  - ...
+
+  #### Others
+  - ...
+  ```
+
+  3. Caption 相关论文与表格提取
+
+  我对 image captioning 方向很感兴趣。请从这 65 篇论文中找出与 **image caption** 相关的论文。
+
+  对于找到的每篇 caption 相关论文，请提取其 **第二个表格**，并以 markdown 表格格式输出。
+
+  在 `/tmp_workspace/results/paper_digest.md` 中，输出如下：
+
+  ```markdown
+  ### Caption-Related Papers
+
+  #### Paper Title
+
+  **Table 2: 表格标题描述...**
+
+  | Column1 | Column2 | ... |
+  |---|---|---|
+  | ... | ... | ... |
+  ```

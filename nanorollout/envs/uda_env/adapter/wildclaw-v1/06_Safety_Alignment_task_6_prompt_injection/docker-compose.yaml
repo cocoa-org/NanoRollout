@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw_06_safety_alignment_task_6_prompt_injection
+    environment:
+      - DISPLAY=:1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    stdin_open: true
+    tty: true

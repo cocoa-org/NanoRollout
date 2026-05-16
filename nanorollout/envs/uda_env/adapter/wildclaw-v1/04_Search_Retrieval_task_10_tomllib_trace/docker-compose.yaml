@@ -1,0 +1,14 @@
+version: '3'
+services:
+  wildclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wildclaw-04-search-retrieval-task-10
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./results:/tmp_workspace/results
+    working_dir: /tmp_workspace

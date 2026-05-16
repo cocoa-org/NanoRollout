@@ -1,0 +1,11 @@
+instruction: |
+  工作目录中有一篇论文 PDF `/tmp_workspace/paper.pdf`。
+
+  请基于该论文制作一份学术会议风格的单页海报 `/tmp_workspace/results/poster.png`。要求：
+  - 单张图片，横向排版，适合学术会议张贴展示
+  - 分辨率足够高（最大边 ≥ 3000 像素）
+  - 包含论文标题、作者信息等核心板块
+  - 包含不少于 3 张图表（架构图、结果可视化、定量对比等）
+  - 设计风格统一且专业，配色协调、排版清晰、信息层次分明
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

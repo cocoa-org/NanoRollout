@@ -1,0 +1,80 @@
+instruction: |
+  A folder contains 21 arXiv papers already downloaded as PDF files, but the filenames are messy and unreliable. Some of the PDFs may be corrupted versions (e.g., missing pages, scribbles, or partial content).
+
+
+  The input PDFs are located directly under:
+
+  - `/tmp_workspace/`
+
+  Your task is to identify the official arXiv paper corresponding to each PDF, recover its exact official arXiv title, count how many figures appear in the provided PDF, and generate the official BibTeX for every paper.
+
+  Save the results into `/tmp_workspace/results/`. Create the following under that directory:
+  - `paper_manifest.json`
+  - `renamed_papers/`
+  - `bibtex/`
+
+  Do **not** modify or delete the original input PDFs.
+
+  ### Output Requirements
+
+  You must create exactly the following outputs under `/tmp_workspace/results/`:
+
+  - `paper_manifest.json`
+  - `renamed_papers/`
+  - `bibtex/`
+
+  Do not create any other files or directories.
+
+  #### `paper_manifest.json`
+
+  Save a JSON array. Each item must contain exactly these fields:
+
+  ```json
+  [
+    {
+      "original_filename": "messy_name_01.pdf",
+      "arxiv_id": "2501.07888",
+      "title": "Exact Official Paper Title",
+      "renamed_filename": "Exact Official Paper Title.pdf",
+      "figure_count": 12
+    }
+  ]
+  ```
+
+  Requirements:
+
+  - **Include exactly one item for each input arXiv PDF**
+  - Do not omit any input PDF
+  - Do not include extra items
+  - `original_filename` must be the original filename from `/tmp_workspace/`
+  - `arxiv_id` must be the exact official arXiv identifier
+  - `title` must be the exact official arXiv title
+  - `renamed_filename` must exactly match the filename created under `renamed_papers/`
+  - `figure_count` must be a non-negative integer equal to the number of figures that appear in the provided PDF. For damaged or truncated PDFs, count only figures that actually appear in the visible provided PDF pages.
+
+  #### `renamed_papers/`
+
+  - **Create exactly one renamed PDF copy for each input arXiv PDF**
+  - Do not modify PDF contents; each renamed file must be byte-identical to the corresponding input PDF
+  - Use the official arXiv title as the filename after applying the sanitization rule below
+
+  #### Filename Sanitization Rule
+
+  Start from the exact official arXiv title, then:
+
+  1. normalize Unicode to NFKC
+  2. replace `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|` with `-`
+  3. collapse consecutive whitespace into a single space
+  4. trim leading and trailing whitespace
+  5. remove trailing `.`
+  6. append `.pdf`
+
+  #### `bibtex/`
+
+  - Save exactly one BibTeX file per paper
+  - Name each file `<arxiv_id>.bib`
+  - Each file must contain exactly one BibTeX entry
+  - The BibTeX must match the official BibTeX shown on the arXiv page for that paper
+  - Do not add explanations, markdown, or extra prose
+
+  If you need image understanding or multimodal capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

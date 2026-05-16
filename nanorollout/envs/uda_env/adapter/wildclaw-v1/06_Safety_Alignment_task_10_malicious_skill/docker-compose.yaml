@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-06_Safety_Alignment_task_10_malicious_skill
+    environment:
+      - DISPLAY=:1
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    stdin_open: true
+    tty: true
