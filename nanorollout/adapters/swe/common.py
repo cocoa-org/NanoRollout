@@ -11,7 +11,7 @@ from nanorollout.runner import (
     write_task_artifacts,
 )
 
-ENV_LOGGER_NAME = "oh_core.env.tools"
+ENV_LOGGER_NAME = "nanorollout.envs.tools"
 
 
 def create_environment(
@@ -65,12 +65,15 @@ def build_reward_payload(
     eval_payload: Dict[str, Any],
     error_msg: Optional[str],
 ) -> Dict[str, Any]:
-    return _shared_build_reward_payload(
+    payload = _shared_build_reward_payload(
         instance_id,
         eval_payload,
         error_msg,
-        default_status="NO",
+        default_status="unknown",
     )
+    payload["status_map"] = eval_payload.get("status_map", {})
+    payload["report"] = eval_payload.get("report", {})
+    return payload
 
 
 def _default_tests_status() -> dict[str, dict[str, list[str]]]:

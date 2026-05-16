@@ -35,6 +35,68 @@ from nanorollout.adapters.terminal.adapter import (
 import nanorollout.runner as runner_module
 
 
+def test_shared_reward_payload_is_task_agnostic() -> None:
+    payload = runner_module.build_reward_payload(
+        "task-1",
+        {
+            "resolved": True,
+            "resolved_status": "FULL",
+            "reward": 1,
+            "status_map": {"test_a": "PASSED"},
+            "report": {"passed": 1},
+        },
+        None,
+        default_status="NO",
+    )
+
+    assert payload == {
+        "instance_id": "task-1",
+        "resolved": True,
+        "resolved_status": "FULL",
+        "reward": 1,
+        "eval_exit_code": None,
+        "error": None,
+    }
+
+
+def test_swe_reward_payload_keeps_test_details() -> None:
+    from nanorollout.adapters.swe.common import build_reward_payload
+
+    payload = build_reward_payload(
+        "swe-1",
+        {
+            "resolved": False,
+            "resolved_status": "RESOLVED_NO",
+            "reward": 0,
+            "status_map": {"test_a": "FAILED"},
+            "report": {"FAIL_TO_PASS": {"success": [], "failure": ["test_a"]}},
+        },
+        None,
+    )
+
+    assert payload["status_map"] == {"test_a": "FAILED"}
+    assert payload["report"] == {"FAIL_TO_PASS": {"success": [], "failure": ["test_a"]}}
+
+
+def test_terminal_reward_payload_omits_test_details() -> None:
+    from nanorollout.adapters.terminal.common import build_reward_payload
+
+    payload = build_reward_payload(
+        "terminal-1",
+        {
+            "resolved": False,
+            "resolved_status": "unresolved",
+            "reward": 0,
+            "status_map": {"test_a": "FAILED"},
+            "report": {"failed": 1},
+        },
+        None,
+    )
+
+    assert "status_map" not in payload
+    assert "report" not in payload
+
+
 def test_runner_specs_load_entrypoints() -> None:
     for spec in RUNNER_SPECS:
         assert callable(load_runner_callable(spec.module, spec.entrypoint))

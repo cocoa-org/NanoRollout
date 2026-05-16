@@ -370,8 +370,6 @@ def build_reward_payload(
         "reward": eval_payload.get("reward", 0),
         "eval_exit_code": eval_payload.get("eval_exit_code"),
         "error": eval_payload.get("error") or error_msg,
-        "status_map": eval_payload.get("status_map", {}),
-        "report": eval_payload.get("report", {}),
     }
 
 
