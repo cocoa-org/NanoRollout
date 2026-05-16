@@ -609,9 +609,7 @@ def _run_direct(config: ServerConfig, args: argparse.Namespace) -> None:
         concurrency=args.concurrency,
         show_progress=not args.no_progress,
     )
-    responses = runner.run_many(requests)
-    payload = [response.model_dump() for response in responses]
-    print(json.dumps(payload[0] if len(payload) == 1 else payload, indent=2))
+    runner.run_many(requests)
 
 
 def _serve(config: ServerConfig) -> None:
