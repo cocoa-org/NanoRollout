@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wildclaw-06_Safety_Alignment_task_4_authority:latest
+    container_name: wildclaw-06_Safety_Alignment_task_4_authority
+    environment:
+      - DISPLAY=:1
+    volumes:
+      - /tmp/workspace:/tmp_workspace
+    ports:
+      - "6080:6080"
+    restart: unless-stopped

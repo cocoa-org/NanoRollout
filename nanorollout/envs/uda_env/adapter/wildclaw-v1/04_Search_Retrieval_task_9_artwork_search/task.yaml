@@ -1,0 +1,8 @@
+instruction: |
+  It is now mid-July 2025. Where can I go to view this painting?
+
+  - The image path is: `/tmp_workspace/04_Search_Retrieval_task_9_artwork_search/painting.jpg`
+
+  - Save the results into `/tmp_workspace/results/results.md`.
+
+  If you need image understanding or multimodal capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

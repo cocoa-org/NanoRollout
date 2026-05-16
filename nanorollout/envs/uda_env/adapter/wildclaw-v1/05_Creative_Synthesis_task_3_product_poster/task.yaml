@@ -1,0 +1,17 @@
+instruction: |
+  I have a product photo of a briefcase at `/tmp_workspace/briefcase.png`.
+
+  Please design an **informational product display image** (1080×1440 px PNG) for this item. The image should clearly present the product's key features and characteristics in a clean, professional layout.
+
+  Basic info:
+
+  - **Brand**: Thornfield & Co.
+  - **Product Name**: The Meridian Briefcase
+  - **Tagline**: "Carry Your Story"
+  - **Price**: $279.00 (reference price $379.00)
+
+  Look at the product photo carefully, identify its standout features (material, craftsmanship, functionality, etc.), and prominently showcase them in the design. Include a note inviting viewers to learn more.
+
+  Save the final image to `/tmp_workspace/results/poster.png`.
+
+  If you need image understanding or multimodal generation capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

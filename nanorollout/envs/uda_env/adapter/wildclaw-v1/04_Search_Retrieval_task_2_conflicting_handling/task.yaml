@@ -1,0 +1,12 @@
+instruction: |
+  During the Paris Olympics, Company A in China sold a batch of sports equipment to domestic Company B for use in Company B’s export business. The parties agreed that Company B should pay for the goods within 30 days after delivery. However, after receiving the goods, Company B never made payment.
+
+  In August of the same year, Company B confirmed by email that it still owed RMB 500,000 in payment and promised to pay as soon as possible.
+
+  After that, the parties engaged in multiple rounds of collection and negotiation, but the debt remained unpaid.
+
+  In September of the same year, I am a lawyer preparing to file a lawsuit on behalf of Company A to recover the payment. My question is: what is the statute of limitations for this claim?
+
+  Write your analysis into `/tmp_workspace/results/results.md`.
+
+  The legal materials in my repository are case-handling reference provisions compiled by our law firm. Please complete the task by referring to these files. These legal provisions are located in the following folder: `/tmp_workspace/04_Search_Retrieval_task_2_conflicting_handling/laws`

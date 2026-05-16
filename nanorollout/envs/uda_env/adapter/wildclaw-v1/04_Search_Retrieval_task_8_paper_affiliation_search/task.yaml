@@ -1,0 +1,6 @@
+instruction: |
+  Help me compile the Oral papers accepted at ICCV 2025, and determine how many of them have SJTU (Shanghai Jiao Tong University) as the first affiliation and how many have FDU (Fudan University) as the first affiliation. 
+  
+  Please provide both the counts and the corresponding list of papers.
+  
+  - Save the results into `/tmp_workspace/results/results.md`.

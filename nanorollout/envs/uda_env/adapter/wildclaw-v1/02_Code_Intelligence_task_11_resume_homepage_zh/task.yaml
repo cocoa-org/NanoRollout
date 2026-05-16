@@ -1,0 +1,22 @@
+instruction: |
+  任务：参考附图 `/tmp_workspace/ref_template_screenshot.png` 中的主页模板风格，根据 PDF 简历 `/tmp_workspace/ref_resume.pdf` 中的信息，为作者 Shengyuan Ding 制作一个新的学术个人主页。（注意：时间有限，尽量15分钟内完成，请注意高效）
+
+  【具体要求】
+  1. 不需要部署到 GitHub，只需在本地生成可用的静态网页
+  2. 论文展示部分只放他以一作或共一身份、已被正式录用的论文（Under Review 的不放），同时 Findings 类别的论文也不展示
+  3. News 部分只展示 2025 年的动态，2024 年及更早或 2026 年及之后的都不用展示
+  4. 个人信息以 PDF 简历 `/tmp_workspace/ref_resume.pdf` 上的内容为准
+  5. 所有代码和资源文件放在 `/tmp_workspace/results` 目录下
+  6. 使用 Playwright + Headless Chromium 将最终网页首页完整截图，保存为 `/tmp_workspace/results/screenshot.png`
+
+  【提示和注意事项】
+  1. 模板参考：`/tmp_workspace/ref_template_screenshot.png` 展示了 AcadHomepage 风格的学术主页，可以直接基于 AcadHomepage 仓库修改，也可以自行搭建同风格页面
+  2. https://SYuan03.github.io/ 和 https://chrisding.me/ 可能是该作者的在线主页，但不保证内容与简历一致（可能网页有更新等），你需要以 PDF 简历的内容为准，如果在线链接有你可以用的资源（如头像图片、论文配图等），可以考虑使用，仅供参考
+  3. 当前 Python 环境已预装 playwright 和 chromium，可直接使用
+  4. 截图需包含完整首页内容
+
+  【输出要求】
+  - `/tmp_workspace/results/` 目录下包含完整的静态网页源码
+  - `/tmp_workspace/results/screenshot.png` 为最终主页首页的完整截图
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

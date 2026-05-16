@@ -187,35 +187,19 @@ def _detect_encrypted_task(task_dir: Path) -> bool:
 
 
 def _load_task(task_dir: Path, use_encrypted: bool) -> dict[str, Any]:
-    if use_encrypted:
-        from nanorollout.envs.uda_env.decrypt import (
-            decrypt_file_to_memory,
-            read_canary,
-        )
+    """Load a task via the per-bench driver.
 
-        task_file = task_dir / "task.yaml.enc"
-        canary = read_canary(task_dir)
-        if canary is None:
-            raise ValueError(f"No canary.txt found in {task_dir}")
-        task_yaml = decrypt_file_to_memory(task_file, canary)
-        task_data = yaml.safe_load(task_yaml)
-        test_file = task_dir / "test.py.enc"
-    else:
-        task_file = task_dir / "task.yaml"
-        with open(task_file, encoding="utf-8") as handle:
-            task_data = yaml.safe_load(handle)
-        test_file = task_dir / "test.py"
+    ``use_encrypted`` is retained for backward compatibility but is ignored —
+    encryption is now an attribute of the cocoa-v1 driver, inferred from the
+    task directory's contents (presence of ``task.yaml.enc`` + ``canary.txt``).
+    """
+    from nanorollout.envs.uda_env.driver import load_driver_for_task_dir
 
-    if task_data is None:
-        raise ValueError(f"Empty task definition in {task_file}")
-    if not isinstance(task_data, dict):
-        raise ValueError(f"Task definition in {task_file} must be a mapping")
-
-    task = dict(task_data)
-    task["task_dir"] = str(task_dir)
-    task["task_name"] = task_dir.name
-    task["test_file_path"] = str(test_file) if test_file.exists() else None
-    task["use_encrypted"] = use_encrypted
+    driver = load_driver_for_task_dir(task_dir)
+    task = driver.load_task(task_dir)
+    # Keep the legacy key around for any caller that still reads it; cocoa
+    # driver populates it from its own logic.
+    task.setdefault("use_encrypted", task.get("use_encrypted", use_encrypted))
     return task
 
 

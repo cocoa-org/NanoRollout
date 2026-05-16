@@ -16,9 +16,7 @@ that uda-desktop exposes on ``/v1/computer-use/*``) lands here as
 inline edits rather than as cross-package re-exports.
 """
 
-import importlib.util
 import json
-import sys
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -36,12 +34,9 @@ from .base import (
 )
 from .utils import colorize, extract_config_info, measure_execution_time
 
-# Import decrypt utilities for encrypted task files
-try:
-    from .decrypt import decrypt_file_to_memory, read_canary
-    DECRYPT_AVAILABLE = True
-except ImportError:
-    DECRYPT_AVAILABLE = False
+# Decryption + grading is now driver-resident; see uda_env.driver.cocoa_v1
+# (host-side test.py.enc) and uda_env.driver.wildclaw_v1 (in-container
+# grade.py).
 
 logger = get_logger("uda.executor")
 
@@ -240,6 +235,25 @@ class TaskExecutor:
         else:
             self._environment_timing["sandbox_startup_s"] = time.perf_counter() - startup_started_at
             raise RuntimeError("Sandbox environment failed to become ready")
+
+        # Driver-specific in-container setup: push exec/ into the container,
+        # run task-local warmup, etc. Cocoa drivers no-op; wildclaw stages
+        # /tmp_workspace/<files> from the adapter's exec/.
+        driver_name = task.get("driver")
+        if driver_name:
+            try:
+                from .driver import load_driver
+                driver = load_driver(driver_name)
+                driver.setup_workspace(self.sandbox_client.runtime, task)
+                driver.run_warmup(self.sandbox_client.runtime, task)
+            except Exception as exc:
+                logger.exception(
+                    "Driver %s setup_workspace/run_warmup failed: %s",
+                    driver_name,
+                    exc,
+                )
+                raise
+
         self.controller.clear_history()
         if hasattr(self.controller, "reset_cost_tracking"):
             self.controller.reset_cost_tracking()
@@ -653,75 +667,38 @@ class TaskExecutor:
 
     @measure_execution_time
     def run_eval(self, task: dict, result: dict) -> dict:
-        """Load and run test function from task's test.py or test.py.enc.
+        """Score the rollout via the per-bench driver.
 
-        Args:
-            task: Task dictionary containing test_file_path and use_encrypted flag
-            result: Result dictionary from run_task
+        cocoa-v1: decrypts test.py.enc host-side and calls ``test(result)``.
+        wildclaw-v1: pushes grade.py + gt/ into the container, runs
+        ``grade()`` inside the sandbox, parses the JSON float dict from
+        stdout.
 
-        Returns:
-            Test result dictionary or None if no test file
+        Returns the driver-specific score dict (or None if the task has
+        no bundled grader).
         """
-        test_file_path = task.get("test_file_path")
+        driver_name = task.get("driver")
         task_name = task.get("task_name", "unknown")
-        use_encrypted = task.get("use_encrypted", False)
-
-        # Early return if no test file
-        if test_file_path is None:
-            logger.debug(f"No test file found for task '{task_name}', skipping evaluation")
+        if not driver_name:
+            logger.debug(
+                "No driver attached to task '%s'; skipping evaluation. "
+                "Hint: ensure the runner uses driver.load_task() which "
+                "stamps the driver field.",
+                task_name,
+            )
             return None
 
-        logger.info(f"Running test for task '{task_name}' with test file {test_file_path} (encrypted: {use_encrypted})")
-
         try:
-            test_file = Path(test_file_path)
-            
-            # Verify file exists
-            if not test_file.exists():
-                logger.warning(f"Test file {test_file_path} does not exist for task '{task_name}'")
-                return None
-
-            if use_encrypted:
-                # Handle encrypted test file - decrypt to memory only
-                if not DECRYPT_AVAILABLE:
-                    raise ImportError("decrypt module not available but use_encrypted=True")
-                
-                # Read canary from task directory
-                task_dir = Path(task.get("task_dir"))
-                canary = read_canary(task_dir)
-                if canary is None:
-                    raise ValueError(f"No canary.txt found in {task_dir}")
-                
-                # Decrypt test.py.enc to memory
-                test_code = decrypt_file_to_memory(test_file, canary)
-                
-                # Execute the decrypted code in a new module namespace
-                module = type(sys)("test")
-                module.__file__ = str(test_file)  # Set a pseudo file path for debugging
-                sys.modules["test"] = module
-                
-                # Compile and execute the code in the module's namespace
-                compiled_code = compile(test_code, str(test_file), 'exec')
-                exec(compiled_code, module.__dict__)
-                
-                logger.debug(f"Test module loaded and executed from encrypted file (in-memory)")
-            else:
-                # Handle plaintext test file - normal import
-                spec = importlib.util.spec_from_file_location("test", test_file)
-                module = importlib.util.module_from_spec(spec)
-                sys.modules["test"] = module
-                spec.loader.exec_module(module)
-                
-                logger.debug(f"Test module loaded successfully from {test_file_path}")
-
-            if hasattr(module, "test"):
-                test_fn = module.test
-                test_result = test_fn(result)
-                logger.info(f"Test completed for task '{task_name}': {colorize(test_result, 'YELLOW')}")
-                return test_result
-            else:
-                logger.warning(f"No 'test' function found in {test_file_path} for task '{task_name}'")
-                return None
-        except Exception as e:
-            logger.error(f"Failed to run test for task '{task_name}': {e}")
+            from .driver import load_driver
+            driver = load_driver(driver_name)
+            scores = driver.score(self.sandbox_client.runtime, task, result)
+            logger.info(
+                "Eval done for '%s' (driver=%s): %s",
+                task_name,
+                driver_name,
+                colorize(scores, "YELLOW"),
+            )
+            return scores
+        except Exception as exc:
+            logger.error("Eval failed for '%s': %s", task_name, exc)
             raise

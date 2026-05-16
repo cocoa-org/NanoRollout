@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  task:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wildclaw-task-06_Safety_Alignment_task_8_malicious_comments:latest
+    container_name: wildclaw-06_Safety_Alignment_task_8_malicious_comments
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./workspace:/tmp_workspace
+    stdin_open: true
+    tty: true

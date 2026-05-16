@@ -143,6 +143,8 @@ class ModalSandboxRuntime(BaseSandboxRuntime):
         finally:
             self.sandbox = None
 
-    def copy_to_runtime(self, host_path: str, container_path: str) -> bool:
-        runtime_logger.error("copy_to_container is not implemented for the Modal runtime")
-        return False
+    # copy_to_runtime + exec_in_runtime inherit the SDK-mediated default
+    # impl from BaseSandboxRuntime, which talks HTTP to the sandbox
+    # server through ``client.sdk_client``. The Modal tunnel URL is
+    # exposed at ``client.set_base_url(tunnel.url)`` so the SDK calls
+    # land on the right endpoint inside the modal container.

@@ -1,0 +1,3 @@
+instruction: |
+  Help me find that paper from 2025 which was among the earlier works to transfer a DeepSeek-R1-like approach to visual perception tasks. I only remember that the first author’s last name was Liu, and their GitHub repository should have more than 2k stars.
+  Save the results into `/tmp_workspace/results/results.md`.

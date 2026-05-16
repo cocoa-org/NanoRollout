@@ -1,0 +1,6 @@
+instruction: |
+  请为开源项目 VLMEvalKit（https://github.com/open-compass/VLMEvalKit/）制作一个现代化的单页宣传主页 `/tmp_workspace/results/index.html`。主页需完整介绍项目核心信息，包含不少于 5 张图片（logo、架构示意、效果展示等），设计应专业美观。所有样式内联或内嵌，确保单文件即可完整渲染。
+
+  完成网页制作后，使用 Playwright + Headless Chromium 对首页进行完整截图（full page screenshot），将截图保存到 `/tmp_workspace/results/screenshot.png`。截图宽度设为 1440px。
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

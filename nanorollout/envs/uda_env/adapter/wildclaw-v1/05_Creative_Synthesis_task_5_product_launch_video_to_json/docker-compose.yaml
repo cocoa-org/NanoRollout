@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw-05_Creative_Synthesis_task_5_product_launch_video_to_json
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL}
+      JUDGE_MODEL: ${JUDGE_MODEL:-openai/gpt-5.4}
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    working_dir: /tmp_workspace

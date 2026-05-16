@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  wildclaw:
+    build: .
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./results:/tmp_workspace/results
+    command: bash

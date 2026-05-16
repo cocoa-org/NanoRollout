@@ -1,0 +1,12 @@
+instruction: |
+  这是一道连点成线谜题。请你完成以下任务（注意：时间有限，尽量15分钟内完成，请注意高效）：
+  1. 分析输入图片，找出所有带编号的点及其位置坐标。
+  2. 编写代码，按编号顺序（1→2→3→…→最后一个）用线段依次连接相邻编号的点。
+  3. 将连线完成后的图片保存。
+
+  输入图片路径：`/tmp_workspace/input/origin.png`
+
+  要求：
+  1. `/tmp_workspace/results/result.png`：连线完成后的图片（在原图上按编号顺序用线段连接所有点后的结果）
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

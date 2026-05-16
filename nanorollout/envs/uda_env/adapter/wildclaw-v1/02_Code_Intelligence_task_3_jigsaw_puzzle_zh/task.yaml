@@ -1,0 +1,45 @@
+instruction: |
+  `/tmp_workspace/input/` 目录下有 15 张图片碎片（`piece_01.png` 到 `piece_15.png`），每张碎片的尺寸相同（200×200 像素）。
+
+  这些碎片来自一张被切成 **3×3 = 9 块**的正方形原图（600×600 像素），但存在以下两个难点：
+
+  1. **干扰碎片**：15 张碎片中混入了 **6 张不属于原图网格的干扰碎片**。这些干扰碎片取自同一张原图的非网格对齐区域（偏移裁切），因此在风格和内容上与正确碎片高度相似，但边缘无法与任何正确碎片对齐。
+  2. **碎片旋转**：9 张正确碎片中，有 5 张被施加了顺时针旋转——其中 2 张旋转了 90°、1 张旋转了 180°、2 张旋转了 270°，其余 4 张朝向正确。你需要检测这些旋转并在拼接前将碎片还原到正确朝向。
+
+  原图是一张朝向正常的图片（人物直立、文字正向可读），不存在整体旋转或翻转。
+
+  请你完成以下任务（注意：时间有限，尽量10分钟内完成，请注意高效）：
+
+  1. 分析所有 15 张碎片图片，判断哪 9 张属于原图的 3×3 网格、哪 6 张是干扰项。
+  2. 对于正确的 9 张碎片，检测每张碎片是否被旋转，将其还原到正确朝向。
+  3. 将还原后的 9 张碎片放到 3×3 网格中的正确位置，拼成完整图片。
+  4. 将拼好的完整图片保存下来，并描述它画的是什么。
+
+  **要求：**
+
+  1. 将拼好的完整图片（600×600）保存为：`/tmp_workspace/results/assembled.png`
+  2. 将结果写入 `/tmp_workspace/results/result.json`，格式如下：
+
+  ```json
+  {
+    "grid": [
+      ["piece_XX.png", "piece_XX.png", "piece_XX.png"],
+      ["piece_XX.png", "piece_XX.png", "piece_XX.png"],
+      ["piece_XX.png", "piece_XX.png", "piece_XX.png"]
+    ],
+    "transforms": {
+      "piece_XX.png": "rotate_90",
+      "piece_XX.png": "rotate_180"
+    },
+    "distractors": ["piece_XX.png", "piece_XX.png", "piece_XX.png", "piece_XX.png", "piece_XX.png", "piece_XX.png"],
+    "description": "拼好后的图片是……（中文描述）"
+  }
+  ```
+
+  其中：
+  - `grid` 是一个 3×3 的二维数组，`grid[行][列]` 对应该位置的碎片文件名（使用原始文件名），行列均从 0 开始（即 `grid[0][0]` 是左上角，`grid[2][2]` 是右下角）。
+  - `transforms` 是一个对象，记录被旋转的碎片及其旋转角度。键为碎片文件名，值为该碎片被施加的顺时针旋转角度（`"rotate_90"`、`"rotate_180"` 或 `"rotate_270"`）。未被旋转的碎片不需要列出。拼接时应先对这些碎片执行逆旋转再放入网格。
+  - `distractors` 是 6 张干扰碎片的文件名列表。
+  - `description` 是对拼好后完整图片的中文描述。
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。
