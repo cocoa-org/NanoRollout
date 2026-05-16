@@ -202,7 +202,9 @@ class InstalledAgentBase(ABC):
                 self._flag_kwargs[descriptor.kwarg] = kwargs.pop(descriptor.kwarg)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
-            raise TypeError(f"Unexpected kwargs for {self.__class__.__name__}: {unexpected}")
+            raise TypeError(
+                f"Unexpected kwargs for {self.__class__.__name__}: {unexpected}"
+            )
 
         self._resolved_flags = self._resolve_flag_values()
         self._resolved_env_vars = self._resolve_env_values()
@@ -490,9 +492,7 @@ class InstalledAgentBase(ABC):
             )
         return metrics
 
-    def _result_message(
-        self, history: list[dict[str, Any]], error: str | None
-    ) -> str:
+    def _result_message(self, history: list[dict[str, Any]], error: str | None) -> str:
         for message in reversed(history):
             if message.get("role") == "assistant":
                 content = (message.get("content") or "").strip()

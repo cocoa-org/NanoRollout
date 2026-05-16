@@ -8,7 +8,7 @@ sudo vim /etc/default/apport
 ```
 and then change the `enabled` to `0`.
 
-## VSCode 
+## VSCode
 todo
 
 ## LibreOffice

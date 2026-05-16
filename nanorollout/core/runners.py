@@ -5,6 +5,9 @@ from typing import Any
 
 from nanorollout.core.models import RunRequest
 
+SWE_RUNNER_MODULE = "nanorollout.adapters.swe.entrypoints"
+TERMINAL_RUNNER_MODULE = "nanorollout.adapters.terminal.entrypoints"
+
 
 def _normalize_name(value: str) -> str:
     return value.strip().lower().replace("_", "-")
@@ -23,102 +26,109 @@ class RunnerSpec:
         return (_normalize_name(self.task), _normalize_name(self.agent))
 
 
+def _swe_runner(
+    agent: str,
+    entrypoint: str,
+    aliases: tuple[str, ...] = (),
+) -> RunnerSpec:
+    return RunnerSpec(
+        task="swe",
+        agent=agent,
+        module=SWE_RUNNER_MODULE,
+        entrypoint=entrypoint,
+        aliases=aliases,
+    )
+
+
+def _terminal_runner(
+    agent: str,
+    entrypoint: str,
+    aliases: tuple[str, ...] = (),
+) -> RunnerSpec:
+    return RunnerSpec(
+        task="terminal",
+        agent=agent,
+        module=TERMINAL_RUNNER_MODULE,
+        entrypoint=entrypoint,
+        aliases=aliases,
+    )
+
+
 RUNNER_SPECS: tuple[RunnerSpec, ...] = (
-    RunnerSpec(
-        task="swe",
-        agent="OpenHands",
-        module="nanorollout.harness.runner.swe.oh_core",
-        entrypoint="run_oh_core",
-        aliases=("openhands", "oh-core",),
+    _swe_runner(
+        "OpenHands",
+        "run_oh_core",
+        aliases=(
+            "openhands",
+            "oh-core",
+        ),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="OpenHands-Lite",
-        module="nanorollout.harness.runner.swe.oh_lite",
-        entrypoint="run_oh_lite",
+    _swe_runner(
+        "OpenHands-Lite",
+        "run_oh_lite",
         aliases=("openhands-lite", "oh-lite"),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="mini-swe-agent",
-        module="nanorollout.harness.runner.swe.miniswe",
-        entrypoint="run_miniswe",
+    _swe_runner(
+        "mini-swe-agent",
+        "run_miniswe",
         aliases=("miniswe", "minisweagent"),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="claude-code",
-        module="nanorollout.harness.runner.swe.installed",
-        entrypoint="run_installed_claude_code",
+    _swe_runner(
+        "claude-code",
+        "run_installed_claude_code",
         aliases=("claudecode", "swe-claude-code"),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="qwen-code",
-        module="nanorollout.harness.runner.swe.installed",
-        entrypoint="run_installed_qwen_code",
+    _swe_runner(
+        "qwen-code",
+        "run_installed_qwen_code",
         aliases=("qwen-coder", "swe-qwen-code"),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="opencode",
-        module="nanorollout.harness.runner.swe.installed",
-        entrypoint="run_installed_opencode",
+    _swe_runner(
+        "opencode",
+        "run_installed_opencode",
         aliases=("open-code", "swe-opencode"),
     ),
-    RunnerSpec(
-        task="swe",
-        agent="r2egym",
-        module="nanorollout.harness.runner.swe.r2egym",
-        entrypoint="run_r2egym",
+    _swe_runner(
+        "r2egym",
+        "run_r2egym",
         aliases=("r2e-gym",),
     ),
     RunnerSpec(
         task="osworld",
         agent="qwen3vl-mmagents",
-        module="nanorollout.harness.runner.osworld",
+        module="nanorollout.adapters.osworld.entrypoints",
         entrypoint="run_osworld",
         # aliases=("osworld"),
     ),
-    RunnerSpec(
-        task="terminal",
-        agent="mini-swe-agent",
-        module="nanorollout.harness.runner.terminal.miniswe",
-        entrypoint="run_tb_miniswe",
+    _terminal_runner(
+        "mini-swe-agent",
+        "run_tb_miniswe",
         aliases=("miniswe", "terminal-miniswe"),
     ),
-    RunnerSpec(
-        task="terminal",
-        agent="claude-code",
-        module="nanorollout.harness.runner.terminal.installed",
-        entrypoint="run_tb_claude_code",
+    _terminal_runner(
+        "claude-code",
+        "run_tb_claude_code",
         aliases=("claudecode", "terminal-claude-code"),
     ),
-    RunnerSpec(
-        task="terminal",
-        agent="qwen-code",
-        module="nanorollout.harness.runner.terminal.installed",
-        entrypoint="run_tb_qwen_code",
+    _terminal_runner(
+        "qwen-code",
+        "run_tb_qwen_code",
         aliases=("qwen-coder", "terminal-qwen-code"),
     ),
-    RunnerSpec(
-        task="terminal",
-        agent="opencode",
-        module="nanorollout.harness.runner.terminal.installed",
-        entrypoint="run_tb_opencode",
+    _terminal_runner(
+        "opencode",
+        "run_tb_opencode",
         aliases=("open-code", "terminal-opencode"),
     ),
-    RunnerSpec(
-        task="terminal",
-        agent="terminus2",
-        module="nanorollout.harness.runner.terminal.terminus2",
-        entrypoint="run_tb_terminus2",
+    _terminal_runner(
+        "terminus2",
+        "run_tb_terminus2",
         aliases=("terminus-2",),
     ),
     RunnerSpec(
         task="cocoa-bench",
         agent="cocoa-agent",
-        module="nanorollout.harness.runner.cocoa_bench.cocoa_agent",
+        module="nanorollout.adapters.cocoa.entrypoints",
         entrypoint="run_cocoa_agent",
         aliases=("cocoa", "cocoagent"),
     ),
@@ -136,6 +146,7 @@ for spec in RUNNER_SPECS:
     LEGACY_RUNNER_ALIASES.setdefault(_normalize_name(spec.agent), spec.key)
     for alias in spec.aliases:
         LEGACY_RUNNER_ALIASES.setdefault(_normalize_name(alias), spec.key)
+
 
 def resolve_runner(task: str, agent: str) -> RunnerSpec:
     key = (_normalize_name(task), _normalize_name(agent))

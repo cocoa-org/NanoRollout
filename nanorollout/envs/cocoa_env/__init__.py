@@ -40,16 +40,16 @@ __all__ = [
 
 def is_browser_action(action: Dict[str, Any]) -> bool:
     """Check if an action is a browser-related action.
-    
+
     Args:
         action: Action dictionary
-        
+
     Returns:
         True if the action is a browser action, False otherwise
     """
     if not isinstance(action, dict):
         return False
-    
+
     action_type = action.get("action_type", "")
     browser_action_types = [
         "browser_click", "browser_type", "browser_press", "browser_key_down", "browser_key_up", "browser_hotkey",
@@ -64,20 +64,20 @@ def is_browser_action(action: Dict[str, Any]) -> bool:
 
 def normalize_action(action: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize action format by flattening parameters if present.
-    
+
     Handles both formats:
     - {"action_type": "file_list", "path": "/home/gem/"} (correct)
     - {"action_type": "file_list", "parameters": {"path": "/home/gem/"}} (needs normalization)
-    
+
     Args:
         action: Action dictionary that may have nested parameters
-        
+
     Returns:
         Normalized action with parameters flattened to top level
     """
     if not isinstance(action, dict):
         return action
-    
+
     # If action has "parameters" field, flatten it
     if "parameters" in action and isinstance(action.get("parameters"), dict):
         normalized = {"action_type": action.get("action_type")}
@@ -87,7 +87,7 @@ def normalize_action(action: Dict[str, Any]) -> Dict[str, Any]:
             if key not in ["parameters", "action_type"]:
                 normalized[key] = value
         return normalized
-    
+
     return action
 
 
@@ -121,14 +121,14 @@ class TaskExecutor:
             controller: Controller instance (LLM or Human). If None, creates controller from config.
         """
         self.config = config
-        
+
         logger.info(f"Config: {config}")
 
         sandbox_config = config.get("sandbox", {})
-        
+
         # Determine which sandbox client to use based on config
         client_type = sandbox_config.get("client_type", "shell").lower()
-        
+
         if controller is None:
             # Get controller type and config from config dict
             controller_config = config.get("controller", {})
@@ -316,7 +316,7 @@ class TaskExecutor:
             "task_name": task.get("task_name", "unknown"),
             "timing_stats": timing_stats,
         }
-        
+
         # Initialize visualization data structure
         visualization_data = {
             "task_description": task_desc,
@@ -334,7 +334,7 @@ class TaskExecutor:
             images_base64 = images_from_last_iteration.copy() if images_from_last_iteration else None
             if images_base64:
                 logger.debug(f"Including {len(images_base64)} image(s) from previous iteration in next prompt")
-            
+
             prompt_with_progress = add_progress_note(prompt, iteration)
             iteration_timing = {
                 "iteration": iteration,
@@ -360,7 +360,7 @@ class TaskExecutor:
             llm_elapsed_s = time.perf_counter() - llm_started_at
             iteration_timing["llm_call_s"] = llm_elapsed_s
             timing_stats["llm_call_total_s"] += llm_elapsed_s
-            
+
             # Extract think content from controller
             think_content = None
             if hasattr(self.controller, 'get_last_think'):
@@ -407,7 +407,7 @@ class TaskExecutor:
                 browser_screenshots = [] # Collect only browser screenshots
                 image_read_contents = [] # Collect only image_read contents
                 iteration_actions = []  # Store actions for visualization
-                
+
                 for single_action in action["actions"]:
                     # Normalize action format
                     single_action = normalize_action(single_action)
@@ -427,7 +427,7 @@ class TaskExecutor:
                     iteration_timing["action_count"] += 1
                     record_tool_feedback(single_action, single_feedback) # TODO: optimize OpenAI Tool Calling format to avoid extra messages in the conversation history
                     feedbacks.append(single_feedback.get("message", ""))
-                    
+
                     # For browser actions, take a screenshot after execution (unless it's already a screenshot action)
                     screenshot_base64 = None
                     if is_browser_action(single_action) and single_action.get("action_type") != "browser_screenshot":
@@ -442,17 +442,17 @@ class TaskExecutor:
                                     browser_screenshots.append(screenshot_base64)
                             except Exception as e:
                                 logger.warning(f"Failed to take screenshot after browser action: {e}")
-                    
+
                     # Check if this action was a screenshot or image_read and has image_base64
                     if single_action.get("action_type") == "browser_screenshot" and "image_base64" in single_feedback:
                         image_base64 = single_feedback["image_base64"]
                         browser_screenshots.append(image_base64)
-                    
+
                     if single_action.get("action_type") == "image_read" and "image_base64" in single_feedback:
                         image_base64 = single_feedback["image_base64"]
                         if image_base64 not in image_read_contents:
                             image_read_contents.append(image_base64)
-                    
+
                     # Store action data for visualization
                     action_data = {
                         "action": single_action,
@@ -460,35 +460,35 @@ class TaskExecutor:
                         "screenshot": screenshot_base64 if screenshot_base64 else (single_feedback.get("image_base64") if single_action.get("action_type") in ["browser_screenshot", "image_read"] else None)
                     }
                     iteration_actions.append(action_data)
-                    
+
                     if single_feedback.get("done"):
                         done = True
                         iteration_timing["completed"] = True
                         break
-                
+
                 # Combine all feedbacks
                 combined_feedback = {
                     "done": done,
                     "message": "\n".join(feedbacks) # '/n' is used to separate each feedback
                 }
-                
+
                 # Construct images list for next iteration
                 # 1. Take ONLY the last browser screenshot if available
                 # 2. Add ALL image_read contents
                 images_from_last_iteration = []
-                
+
                 if browser_screenshots:
                     images_from_last_iteration.append(browser_screenshots[-1])
-                
+
                 # Append all manually read images
                 images_from_last_iteration.extend(image_read_contents)
-                
+
                 # For backward compatibility in feedback dict (though mostly unused if images_from_last_iteration is set)
                 if images_from_last_iteration:
                     combined_feedback["image_base64"] = images_from_last_iteration[-1]
-                
+
                 feedback = combined_feedback
-                
+
                 # Store iteration data for visualization
                 visualization_data["iterations"].append({
                     "iteration": iteration,
@@ -512,7 +512,7 @@ class TaskExecutor:
                 timing_stats["tool_execution_total_s"] += tool_elapsed_s
                 iteration_timing["action_count"] = 1
                 record_tool_feedback(action, feedback)
-                
+
                 # For browser actions, take a screenshot after execution (unless it's already a screenshot action)
                 screenshot_base64 = None
                 if is_browser_action(action) and action.get("action_type") != "browser_screenshot":
@@ -525,7 +525,7 @@ class TaskExecutor:
                             timing_stats["post_action_screenshot_total_s"] += screenshot_elapsed_s
                         except Exception as e:
                             logger.warning(f"Failed to take screenshot after browser action: {e}")
-                
+
                 # Store images from this iteration for next iteration
                 images_from_last_iteration = []  # Reset for current iteration
                 if action.get("action_type") in ["browser_screenshot", "image_read"] and "image_base64" in feedback:
@@ -533,7 +533,7 @@ class TaskExecutor:
                     images_from_last_iteration = [image_base64]  # Store single image for next iteration
                 elif screenshot_base64:
                     images_from_last_iteration = [screenshot_base64]
-                
+
                 # Store iteration data for visualization
                 visualization_data["iterations"].append({
                     "iteration": iteration,
@@ -577,11 +577,11 @@ class TaskExecutor:
             "task_name": task.get("task_name", "unknown"),
             "timing_stats": timing_stats,
         }
-        
+
         # Add task_result if it was provided in task_complete
         if task_result:
             result_dict["task_result"] = task_result
-        
+
         # Add API cost statistics if controller supports it
         if hasattr(self.controller, "get_cost_stats"):
             api_cost_stats = self.controller.get_cost_stats()
@@ -630,7 +630,7 @@ class TaskExecutor:
             float(timing_stats.get("other_overhead_total_s") or 0.0),
             float(timing_stats.get("iteration_total_s") or 0.0),
         )
-        
+
         return result_dict
 
     @measure_execution_time
@@ -657,7 +657,7 @@ class TaskExecutor:
 
         try:
             test_file = Path(test_file_path)
-            
+
             # Verify file exists
             if not test_file.exists():
                 logger.warning(f"Test file {test_file_path} does not exist for task '{task_name}'")
@@ -667,25 +667,25 @@ class TaskExecutor:
                 # Handle encrypted test file - decrypt to memory only
                 if not DECRYPT_AVAILABLE:
                     raise ImportError("decrypt module not available but use_encrypted=True")
-                
+
                 # Read canary from task directory
                 task_dir = Path(task.get("task_dir"))
                 canary = read_canary(task_dir)
                 if canary is None:
                     raise ValueError(f"No canary.txt found in {task_dir}")
-                
+
                 # Decrypt test.py.enc to memory
                 test_code = decrypt_file_to_memory(test_file, canary)
-                
+
                 # Execute the decrypted code in a new module namespace
                 module = type(sys)("test")
                 module.__file__ = str(test_file)  # Set a pseudo file path for debugging
                 sys.modules["test"] = module
-                
+
                 # Compile and execute the code in the module's namespace
                 compiled_code = compile(test_code, str(test_file), 'exec')
                 exec(compiled_code, module.__dict__)
-                
+
                 logger.debug(f"Test module loaded and executed from encrypted file (in-memory)")
             else:
                 # Handle plaintext test file - normal import
@@ -693,7 +693,7 @@ class TaskExecutor:
                 module = importlib.util.module_from_spec(spec)
                 sys.modules["test"] = module
                 spec.loader.exec_module(module)
-                
+
                 logger.debug(f"Test module loaded successfully from {test_file_path}")
 
             if hasattr(module, "test"):

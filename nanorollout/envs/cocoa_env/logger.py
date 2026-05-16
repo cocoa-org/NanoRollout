@@ -4,6 +4,7 @@ Provides consistent log formatting and logger management across all modules.
 """
 
 import logging
+import os
 from typing import Optional
 from colorama import Fore, Style
 
@@ -45,24 +46,39 @@ def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> None:
 
     _root_logger = logging.getLogger("executor")
     _root_logger.setLevel(level)
-    _root_logger.handlers.clear()
     _root_logger.propagate = False
 
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
-    handler.setFormatter(ColoredFormatter(datefmt=DATE_FORMAT))
-    _root_logger.addHandler(handler)
+    stream_handler = next(
+        (
+            handler
+            for handler in _root_logger.handlers
+            if getattr(handler, "_cocoa_stream_handler", False)
+        ),
+        None,
+    )
+    if stream_handler is None:
+        stream_handler = logging.StreamHandler()
+        stream_handler._cocoa_stream_handler = True
+        stream_handler.setFormatter(ColoredFormatter(datefmt=DATE_FORMAT))
+        _root_logger.addHandler(stream_handler)
+    stream_handler.setLevel(level)
 
     if log_file:
-        file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
-        file_handler.setLevel(level)
-        file_handler.setFormatter(
-            logging.Formatter(
-                fmt="%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)d - %(message)s",
-                datefmt=DATE_FORMAT,
+        target = os.path.abspath(log_file)
+        if not any(
+            isinstance(handler, logging.FileHandler)
+            and os.path.abspath(handler.baseFilename) == target
+            for handler in _root_logger.handlers
+        ):
+            file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+            file_handler.setLevel(level)
+            file_handler.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)d - %(message)s",
+                    datefmt=DATE_FORMAT,
+                )
             )
-        )
-        _root_logger.addHandler(file_handler)
+            _root_logger.addHandler(file_handler)
 
     _setup_done = True
 

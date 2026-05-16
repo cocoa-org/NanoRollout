@@ -352,16 +352,16 @@ class BrowserSandboxClient(SandboxClient):
 
     def _construct_browser_action(self, action_data: Dict[str, Any]):
         """Construct a browser action object from action data.
-        
+
         Args:
             action_data: Dictionary containing action_type and parameters
-            
+
         Returns:
             Browser action object
         """
         action_type = action_data.get("action_type")
         action_data = self._maybe_project_relative_coordinates(action_type, action_data)
-        
+
         if action_type == "browser_click":
             return Action_Click(
                 x=action_data.get("x"),
@@ -423,7 +423,7 @@ class BrowserSandboxClient(SandboxClient):
 
     def _take_screenshot(self) -> tuple[str, str]:
         """Take a screenshot and return base64 encoded string and status message.
-        
+
         Returns:
             Tuple of (base64_encoded_image, status_message)
         """
@@ -439,19 +439,19 @@ class BrowserSandboxClient(SandboxClient):
         except Exception as e:
             logger.error(f"Failed to take screenshot: {e}")
             return "", f"Failed to take screenshot: {str(e)}"
-    
+
     def take_screenshot(self) -> tuple[str, str]:
         """Public method to take a screenshot for visualization.
-        
+
         Returns:
             Tuple of (base64_encoded_image, status_message)
         """
         self._initialize_sdk_client()
         return self._take_screenshot()
-    
+
     def _get_browser_info(self) -> str:
         """Get browser information including CDP URL and viewport.
-        
+
         Returns:
             Browser info as formatted string
         """
@@ -462,13 +462,13 @@ class BrowserSandboxClient(SandboxClient):
         except Exception as e:
             logger.error(f"Failed to get browser info: {e}")
             return f"Failed to get browser info: {str(e)}"
-    
+
     def _run_async(self, coro):
         """Run an async coroutine, handling both sync and async contexts.
-        
+
         Args:
             coro: Coroutine to run
-            
+
         Returns:
             Result of the coroutine
         """
@@ -480,7 +480,7 @@ class BrowserSandboxClient(SandboxClient):
             # Create a new event loop in a thread
             import concurrent.futures
             import threading
-            
+
             def run_in_thread():
                 new_loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(new_loop)
@@ -488,7 +488,7 @@ class BrowserSandboxClient(SandboxClient):
                     return new_loop.run_until_complete(coro)
                 finally:
                     new_loop.close()
-            
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(run_in_thread)
                 return future.result(timeout=60)  # Increased timeout for complex pages
@@ -498,7 +498,7 @@ class BrowserSandboxClient(SandboxClient):
 
     def _with_page(self, func, wait_timeout: int = 5000):
         """Connect to the running browser via CDP and run an async function on the active page.
-        
+
         Args:
             func: Async function that takes a page and returns a result
             wait_timeout: Timeout in ms for waiting for page load (default 5000ms, use 0 to skip wait)
@@ -583,14 +583,14 @@ class BrowserSandboxClient(SandboxClient):
                                 attrs[attr_name] = val
                         except Exception:
                             pass
-                    
+
                     # Build info string
                     info_parts = [f"{i+1}. <{tag}>"]
-                    
+
                     # Add id if present (most specific)
                     if "id" in attrs:
                         info_parts.append(f"id=\"{attrs['id']}\"")
-                    
+
                     # Add class if present
                     if "class" in attrs:
                         # Truncate long class lists
@@ -598,42 +598,42 @@ class BrowserSandboxClient(SandboxClient):
                         if len(class_val) > 100:
                             class_val = class_val[:100] + "..."
                         info_parts.append(f"class=\"{class_val}\"")
-                    
+
                     # Add name if present
                     if "name" in attrs:
                         info_parts.append(f"name=\"{attrs['name']}\"")
-                    
+
                     # Add type if present (for inputs)
                     if "type" in attrs:
                         info_parts.append(f"type=\"{attrs['type']}\"")
-                    
+
                     # Add href if present
                     if "href" in attrs:
                         href_val = attrs["href"]
                         if len(href_val) > 80:
                             href_val = href_val[:80] + "..."
                         info_parts.append(f"href=\"{href_val}\"")
-                    
+
                     # Add aria-label if present (accessibility)
                     if "aria-label" in attrs:
                         aria_val = attrs["aria-label"]
                         if len(aria_val) > 60:
                             aria_val = aria_val[:60] + "..."
                         info_parts.append(f"aria-label=\"{aria_val}\"")
-                    
+
                     # Add role if present
                     if "role" in attrs:
                         info_parts.append(f"role=\"{attrs['role']}\"")
-                    
+
                     # Add text snippet (truncated)
                     if text:
                         snippet = text[:150].replace("\n", " ").strip()
                         if len(text) > 150:
                             snippet += "..."
                         info_parts.append(f"text=\"{snippet}\"")
-                    
+
                     results.append(" ".join(info_parts))
-                
+
                 extra = ""
                 if len(elements) > limit:
                     extra = f"\n... and {len(elements) - limit} more elements"
@@ -759,17 +759,17 @@ class BrowserSandboxClient(SandboxClient):
     #             idx = min(max(nth, 0), len(elements) - 1)
     #             target = elements[idx]
     #             await target.scroll_into_view_if_needed(timeout=timeout_ms)
-    #             
+    #
     #             if clear_first:
     #                 await target.fill("", timeout=timeout_ms)
-    #             
+    #
     #             await target.type(text, timeout=timeout_ms)
-    #             
+    #
     #             try:
     #                 final_value = await target.input_value()
     #             except Exception:
     #                 final_value = text
-    #             
+    #
     #             return f"Typed into element {idx+1}/{len(elements)} matching '{selector}'. Final value: {final_value[:120]}"
 
     #         return self._with_page(lambda page: op(page), wait_timeout=5000)
@@ -822,7 +822,7 @@ class BrowserSandboxClient(SandboxClient):
     #                     return f"No element found for selector '{selector}'"
     #                 idx = min(max(nth, 0), len(elements) - 1)
     #                 target = elements[idx]
-    #                 
+    #
     #                 if direction == "down":
     #                     await target.evaluate(f"el => el.scrollTop += {amount}")
     #                 elif direction == "up":
@@ -831,7 +831,7 @@ class BrowserSandboxClient(SandboxClient):
     #                     await target.evaluate(f"el => el.scrollLeft -= {amount}")
     #                 elif direction == "right":
     #                     await target.evaluate(f"el => el.scrollLeft += {amount}")
-    #                 
+    #
     #                 return f"Scrolled {direction} by {amount}px on element {idx+1}/{len(elements)} matching '{selector}'"
     #             else:
     #                 if direction == "down":
@@ -842,7 +842,7 @@ class BrowserSandboxClient(SandboxClient):
     #                     await page.evaluate(f"window.scrollBy(-{amount}, 0)")
     #                 elif direction == "right":
     #                     await page.evaluate(f"window.scrollBy({amount}, 0)")
-    #                 
+    #
     #                 return f"Scrolled page {direction} by {amount}px"
 
     #         return self._with_page(lambda page: op(page), wait_timeout=5000)
@@ -861,7 +861,7 @@ class BrowserSandboxClient(SandboxClient):
                     document.querySelectorAll('[data-cocoa-bid]').forEach(el => {
                         el.removeAttribute('data-cocoa-bid');
                     });
-                    
+
                     // Interactive element selectors
                     const interactiveSelectors = [
                         'a[href]',
@@ -891,7 +891,7 @@ class BrowserSandboxClient(SandboxClient):
                         '[data-dismiss]',
                         '[data-close]'
                     ];
-                    
+
                     // Helper function to check if element is interactive
                     function isInteractive(el) {
                         const tag = el.tagName.toLowerCase();
@@ -899,54 +899,54 @@ class BrowserSandboxClient(SandboxClient):
                         const hasRole = ['button', 'link', 'tab', 'menuitem', 'checkbox', 'radio', 'switch'].includes(el.getAttribute('role'));
                         const isClickable = el.style.cursor === 'pointer' || window.getComputedStyle(el).cursor === 'pointer';
                         const hasCloseIndicator = (el.textContent || '').trim().match(/^[×✕✖✗xX]$/);
-                        
+
                         return hasClick || hasRole || isClickable || hasCloseIndicator;
                     }
-                    
+
                     // Get all potentially interactive elements
                     const directElements = Array.from(document.querySelectorAll(interactiveSelectors.join(',')));
-                    
+
                     // Also check divs and spans with cursor:pointer or close indicators
                     const allDivSpan = Array.from(document.querySelectorAll('div, span, i, svg'));
                     const extraElements = allDivSpan.filter(el => {
                         if (directElements.includes(el)) return false;
                         return isInteractive(el);
                     });
-                    
+
                     const elements = [...directElements, ...extraElements];
                     const results = [];
                     let bid = 1;
-                    
+
                     for (const el of elements) {
                         // Check visibility
                         const rect = el.getBoundingClientRect();
                         const style = window.getComputedStyle(el);
-                        
+
                         // More lenient visibility check
                         if (style.display === 'none' || style.visibility === 'hidden') {
                             continue;
                         }
-                        
+
                         // Allow small elements (close buttons can be small)
                         if (rect.width === 0 && rect.height === 0) {
                             continue;
                         }
-                        
+
                         // Check if element is actually rendered and not completely transparent
                         if (style.opacity === '0') {
                             continue;
                         }
-                        
+
                         // Skip if covered by another element (except for high z-index elements like modals)
                         const zIndex = parseInt(style.zIndex) || 0;
                         if (zIndex < 0) {
                             continue;
                         }
-                        
+
                         // Assign BID
                         const bidStr = `bid${bid}`;
                         el.setAttribute('data-cocoa-bid', bidStr);
-                        
+
                         // Extract element info
                         const tag = el.tagName.toLowerCase();
                         const text = (el.innerText || el.textContent || '').trim().substring(0, 150);
@@ -962,7 +962,7 @@ class BrowserSandboxClient(SandboxClient):
                         const name = el.name || '';
                         const dataDismiss = el.getAttribute('data-dismiss') || '';
                         const dataClose = el.getAttribute('data-close') || '';
-                        
+
                         // Build readable description
                         let description = `<${tag}>`;
                         if (id) description += ` id="${id}"`;
@@ -978,32 +978,32 @@ class BrowserSandboxClient(SandboxClient):
                         if (value) description += ` value="${value}"`;
                         if (placeholder) description += ` placeholder="${placeholder}"`;
                         if (href) description += ` href="${href.substring(0, 80)}"`;
-                        
+
                         results.push({
                             bid: bidStr,
                             description: description
                         });
-                        
+
                         bid++;
                         if (bid > """ + str(max_elements) + """) break;
                     }
-                    
+
                     return results;
                 }
                 """
-                
+
                 elements_info = await page.evaluate(js_code)
-                
+
                 if not elements_info:
                     return "No interactive elements found on page"
-                
+
                 # Format output
                 lines = [f"Found {len(elements_info)} interactive element(s):"]
                 for elem in elements_info:
                     lines.append(f"[{elem['bid']}] {elem['description']}")
-                
+
                 return "\n".join(lines)
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to mark elements and extract: {e}")
@@ -1017,22 +1017,22 @@ class BrowserSandboxClient(SandboxClient):
                 element = await page.query_selector(selector)
                 if not element:
                     return f"ERROR: No element found with BID '{bid}'. This BID is stale/invalid. DO NOT retry this BID. You MUST run dom_mark_elements() again to get fresh BIDs, then find your target element in the new list and use its new BID."
-                
+
                 # Get element info before clicking
                 tag_name = await element.evaluate('el => el.tagName.toLowerCase()')
                 element_visible = await element.is_visible()
                 element_enabled = await element.is_enabled()
-                
+
                 try:
                     text_before = await element.inner_text()
                     text_before = text_before.strip().replace("\n", " ")
                 except Exception:
                     text_before = ""
-                
+
                 # Try multiple click strategies
                 click_success = False
                 error_msg = ""
-                
+
                 # Strategy 1: Standard click with scroll
                 try:
                     await element.scroll_into_view_if_needed(timeout=timeout_ms)
@@ -1040,7 +1040,7 @@ class BrowserSandboxClient(SandboxClient):
                     click_success = True
                 except Exception as e1:
                     error_msg = str(e1)
-                    
+
                     # Strategy 2: Force click
                     try:
                         await element.click(button=button, click_count=click_count, timeout=timeout_ms, force=True)
@@ -1048,7 +1048,7 @@ class BrowserSandboxClient(SandboxClient):
                         error_msg = ""
                     except Exception as e2:
                         error_msg = str(e2)
-                        
+
                         # Strategy 3: JS click for stubborn elements
                         try:
                             await element.evaluate('el => el.click()')
@@ -1056,10 +1056,10 @@ class BrowserSandboxClient(SandboxClient):
                             error_msg = ""
                         except Exception as e3:
                             error_msg = f"All click strategies failed. Last error: {str(e3)}"
-                
+
                 if not click_success:
                     return f"Failed to click BID '{bid}' ({tag_name}). Element visible: {element_visible}, enabled: {element_enabled}. Error: {error_msg}"
-                
+
                 # Get element state after clicking (if still exists)
                 try:
                     await page.wait_for_timeout(300)  # Short wait for UI update
@@ -1070,9 +1070,9 @@ class BrowserSandboxClient(SandboxClient):
                 except Exception:
                     # Element might be removed after click (e.g., close button)
                     return f"Clicked element with BID '{bid}' (button={button}, clicks={click_count}). Element removed from DOM (likely a close/dismiss button or navigation)."
-                
+
                 return f"Clicked element with BID '{bid}' (button={button}, clicks={click_count}). Text: {text_before[:120]}"
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to click BID: {e}")
@@ -1086,18 +1086,18 @@ class BrowserSandboxClient(SandboxClient):
                 element = await page.query_selector(selector)
                 if not element:
                     return f"ERROR: No element found with BID '{bid}'. This BID is stale/invalid. DO NOT retry this BID. You MUST run dom_mark_elements() again to get fresh BIDs."
-                
+
                 await element.scroll_into_view_if_needed(timeout=timeout_ms)
                 await element.hover(timeout=timeout_ms)
-                
+
                 try:
                     text = await element.inner_text()
                     text = text.strip().replace("\n", " ")
                 except Exception:
                     text = ""
-                
+
                 return f"Hovered over element with BID '{bid}'. Text: {text[:120]}"
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to hover BID: {e}")
@@ -1111,21 +1111,21 @@ class BrowserSandboxClient(SandboxClient):
                 element = await page.query_selector(selector)
                 if not element:
                     return f"ERROR: No element found with BID '{bid}'. This BID is stale/invalid. DO NOT retry this BID. You MUST run dom_mark_elements() again to get fresh BIDs."
-                
+
                 await element.scroll_into_view_if_needed(timeout=timeout_ms)
-                
+
                 if clear_first:
                     await element.fill("", timeout=timeout_ms)
-                
+
                 await element.type(text, timeout=timeout_ms)
-                
+
                 try:
                     final_value = await element.input_value()
                 except Exception:
                     final_value = text
-                
+
                 return f"Typed into element with BID '{bid}'. Final value: {final_value[:120]}"
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to type into BID: {e}")
@@ -1140,15 +1140,15 @@ class BrowserSandboxClient(SandboxClient):
                     element = await page.query_selector(selector)
                     if not element:
                         return f"ERROR: No element found with BID '{bid}'. This BID is stale/invalid. DO NOT retry this BID. You MUST run dom_mark_elements() again to get fresh BIDs."
-                    
+
                     await element.scroll_into_view_if_needed(timeout=timeout_ms)
                     await element.press(key, timeout=timeout_ms)
-                    
+
                     return f"Pressed key '{key}' on element with BID '{bid}'"
                 else:
                     await page.keyboard.press(key)
                     return f"Pressed key '{key}' on page"
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to press key: {e}")
@@ -1163,7 +1163,7 @@ class BrowserSandboxClient(SandboxClient):
                     element = await page.query_selector(selector)
                     if not element:
                         return f"ERROR: No element found with BID '{bid}'. This BID is stale/invalid. DO NOT retry this BID. You MUST run dom_mark_elements() again to get fresh BIDs."
-                    
+
                     # Get scroll info before scrolling
                     scroll_info_before = await element.evaluate("""
                         el => ({
@@ -1175,7 +1175,7 @@ class BrowserSandboxClient(SandboxClient):
                             clientWidth: el.clientWidth
                         })
                     """)
-                    
+
                     if direction == "down":
                         await element.evaluate(f"el => el.scrollTop += {amount}")
                     elif direction == "up":
@@ -1184,7 +1184,7 @@ class BrowserSandboxClient(SandboxClient):
                         await element.evaluate(f"el => el.scrollLeft -= {amount}")
                     elif direction == "right":
                         await element.evaluate(f"el => el.scrollLeft += {amount}")
-                    
+
                     # Get scroll info after scrolling
                     scroll_info_after = await element.evaluate("""
                         el => ({
@@ -1196,7 +1196,7 @@ class BrowserSandboxClient(SandboxClient):
                             clientWidth: el.clientWidth
                         })
                     """)
-                    
+
                     # Calculate scroll position and limits
                     if direction in ["up", "down"]:
                         max_scroll = scroll_info_after["scrollHeight"] - scroll_info_after["clientHeight"]
@@ -1224,7 +1224,7 @@ class BrowserSandboxClient(SandboxClient):
                         else:
                             percent = int((current / max_scroll) * 100) if max_scroll > 0 else 0
                             position_info += f" ({percent}%)"
-                    
+
                     return f"Scrolled {direction} by {amount}px on element with BID '{bid}'. {position_info}"
                 else:
                     # Scroll the page - try multiple strategies for modern SPA pages
@@ -1238,14 +1238,14 @@ class BrowserSandboxClient(SandboxClient):
                             clientWidth: window.innerWidth
                         })
                     """)
-                    
+
                     # Strategy 1: Try scrolling the main scrollable container if page itself isn't scrollable
                     page_scrollable_x = scroll_info_before["scrollWidth"] > scroll_info_before["clientWidth"]
                     page_scrollable_y = scroll_info_before["scrollHeight"] > scroll_info_before["clientHeight"]
-                    
+
                     scroll_success = False
                     scroll_target = "page"
-                    
+
                     # If page isn't scrollable in target direction, try to find and scroll a container
                     if (direction in ["left", "right"] and not page_scrollable_x) or \
                        (direction in ["up", "down"] and not page_scrollable_y):
@@ -1255,33 +1255,33 @@ class BrowserSandboxClient(SandboxClient):
                                 const allElements = document.querySelectorAll('*');
                                 let bestContainer = null;
                                 let bestSize = 0;
-                                
+
                                 for (const el of allElements) {{
                                     if (el === document.body || el === document.documentElement) continue;
-                                    
+
                                     const style = window.getComputedStyle(el);
                                     const overflowX = style.overflowX;
                                     const overflowY = style.overflowY;
-                                    
+
                                     let isScrollable = false;
                                     let scrollableSize = 0;
-                                    
+
                                     if (direction === 'left' || direction === 'right') {{
-                                        isScrollable = (overflowX === 'auto' || overflowX === 'scroll') && 
+                                        isScrollable = (overflowX === 'auto' || overflowX === 'scroll') &&
                                                       el.scrollWidth > el.clientWidth;
                                         scrollableSize = el.scrollWidth - el.clientWidth;
                                     }} else {{
-                                        isScrollable = (overflowY === 'auto' || overflowY === 'scroll') && 
+                                        isScrollable = (overflowY === 'auto' || overflowY === 'scroll') &&
                                                       el.scrollHeight > el.clientHeight;
                                         scrollableSize = el.scrollHeight - el.clientHeight;
                                     }}
-                                    
+
                                     if (isScrollable && scrollableSize > bestSize) {{
                                         bestContainer = el;
                                         bestSize = scrollableSize;
                                     }}
                                 }}
-                                
+
                                 if (bestContainer) {{
                                     if (direction === 'down') {{
                                         bestContainer.scrollTop += amount;
@@ -1297,11 +1297,11 @@ class BrowserSandboxClient(SandboxClient):
                                 return false;
                             }}
                         """, direction, amount)
-                        
+
                         if container_scrolled:
                             scroll_success = True
                             scroll_target = "container"
-                    
+
                     # Strategy 2: Scroll the page/window (if not already scrolled via container)
                     if not scroll_success:
                         if direction == "down":
@@ -1312,10 +1312,10 @@ class BrowserSandboxClient(SandboxClient):
                             await page.evaluate(f"window.scrollBy(-{amount}, 0)")
                         elif direction == "right":
                             await page.evaluate(f"window.scrollBy({amount}, 0)")
-                    
+
                     # Wait a bit for scroll to complete
                     await page.wait_for_timeout(100)
-                    
+
                     # Get scroll info after scrolling
                     scroll_info_after = await page.evaluate("""
                         () => ({
@@ -1327,7 +1327,7 @@ class BrowserSandboxClient(SandboxClient):
                             clientWidth: window.innerWidth
                         })
                     """)
-                    
+
                     # Calculate scroll position and limits
                     if direction in ["up", "down"]:
                         max_scroll = scroll_info_after["scrollHeight"] - scroll_info_after["clientHeight"]
@@ -1355,19 +1355,19 @@ class BrowserSandboxClient(SandboxClient):
                         else:
                             percent = int((current / max_scroll) * 100) if max_scroll > 0 else 0
                             position_info += f" ({percent}%)"
-                    
+
                     # Check if scroll actually happened
                     scroll_changed = False
                     if direction in ["up", "down"]:
                         scroll_changed = abs(scroll_info_after["scrollY"] - scroll_info_before["scrollY"]) > 1
                     else:
                         scroll_changed = abs(scroll_info_after["scrollX"] - scroll_info_before["scrollX"]) > 1
-                    
+
                     if not scroll_changed and max_scroll <= 0:
                         return f"WARNING: Page is not scrollable in {direction} direction. Content fits within viewport (scrollWidth={scroll_info_after['scrollWidth']}, clientWidth={scroll_info_after['clientWidth']}). Try scrolling a specific element by providing its BID from dom_mark_elements()."
-                    
+
                     return f"Scrolled page {direction} by {amount}px ({scroll_target}). {position_info}"
-            
+
             return self._with_page(lambda page: op(page), wait_timeout=5000)
         except Exception as e:
             logger.error(f"Failed to scroll: {e}")
@@ -1663,13 +1663,13 @@ class BrowserSandboxClient(SandboxClient):
             # Execute the browser action
             browser_action = self._construct_browser_action(action)
             response = self.sdk_client.browser.execute_action(request=browser_action)
-            
+
             output = f"Action executed successfully. Response: {response}"
             feedback = {
                 "done": False,
                 "message": output,
             }
-            
+
             # Record this action-feedback pair
             self.execution_history.append({
                 "action": action,
@@ -1718,23 +1718,23 @@ class BrowserSandboxClient(SandboxClient):
 
 class UnifiedSandboxClient(SandboxClient):
     """Unified client that can handle browser, file, code, and shell operations."""
-    
+
     def __init__(self, sandbox_config: Dict[str, Any] | None = None, **kwargs):
         super().__init__(sandbox_config, **kwargs)
         self.execution_history: list[Dict[str, Any]] = []
         self.sdk_client: Optional[Sandbox] = None
-        
+
         # Session IDs for stateful operations
         self.shell_session_id: Optional[str] = None
         self.jupyter_session_id: Optional[str] = None
-    
+
     def _initialize_sdk_client(self) -> None:
         """Initialize the AIO Sandbox SDK client and create sessions."""
         if self.sdk_client is None:
             self.sdk_client = Sandbox(base_url=self.base_url)
             logger.debug(f"Initialized Sandbox SDK client with base_url: {self.base_url}")
             self._configure_browser_resolution()
-            
+
             # Create shell session
             try:
                 session = self.sdk_client.shell.create_session(exec_dir="/home/gem")
@@ -1742,7 +1742,7 @@ class UnifiedSandboxClient(SandboxClient):
                 logger.debug(f"Created shell session: {self.shell_session_id}")
             except Exception as e:
                 logger.warning(f"Failed to create shell session: {e}")
-            
+
             # Create Jupyter session
             try:
                 session = self.sdk_client.jupyter.create_session(kernel_name="python3")
@@ -1756,16 +1756,16 @@ class UnifiedSandboxClient(SandboxClient):
         self.sdk_client = None
         self.shell_session_id = None
         self.jupyter_session_id = None
-    
+
     def get_feedback(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Get feedback from executing any type of action.
-        
+
         Determines the action type and routes to appropriate handler.
         """
         self._initialize_sdk_client()
-        
+
         action_type = action.get("action_type")
-        
+
         # Handle task_complete action
         if action_type == "task_complete" or action_type == "exit":
             logger.debug("Task completed")
@@ -1785,7 +1785,7 @@ class UnifiedSandboxClient(SandboxClient):
                 }
             self.execution_history.append({"action": action, "feedback": feedback})
             return feedback
-        
+
         # Route to appropriate handler based on action type
         try:
             # Browser actions
@@ -1798,36 +1798,36 @@ class UnifiedSandboxClient(SandboxClient):
                               "browser_screenshot", "browser_get_viewport_info",
                               ]:
                 return self._handle_browser_action(action)
-            
+
             # File actions
             elif action_type in ["file_read", "file_write", "file_list",
-                               "replace_in_file", "search_in_file", "find_files", 
+                               "replace_in_file", "search_in_file", "find_files",
                                "str_replace_editor", "image_read"]:
                 return self._handle_file_action(action)
-            
+
             # Code actions
             elif action_type in ["code_execute"]:
                 return self._handle_code_action(action)
-            
+
             # Shell actions
             elif action_type in ["shell_execute"] or action.get("command"):
                 return self._handle_shell_action(action)
-            
+
             else:
                 message = f"Unknown action type: {action_type}"
                 feedback = {"done": False, "message": message}
                 self.execution_history.append({"action": action, "feedback": feedback})
                 return feedback
-        
+
         except Exception as e:
             logger.error(f"Error executing action: {e}")
             feedback = {"done": False, "message": f"Error: {str(e)}"}
             self.execution_history.append({"action": action, "feedback": feedback})
             return feedback
-    
+
     def take_screenshot(self) -> tuple[str, str]:
         """Take a screenshot and return base64 encoded string and status message.
-        
+
         Returns:
             Tuple of (base64_encoded_image, status_message)
         """
@@ -1837,7 +1837,7 @@ class UnifiedSandboxClient(SandboxClient):
             screenshot_data = b""
             for chunk in self.sdk_client.browser.screenshot():
                 screenshot_data += chunk
-            
+
             # Encode to base64
             base64_image = base64.b64encode(screenshot_data).decode('utf-8')
             status_message = f"Screenshot taken successfully ({len(screenshot_data)} bytes)"
@@ -1845,7 +1845,7 @@ class UnifiedSandboxClient(SandboxClient):
         except Exception as e:
             logger.error(f"Failed to take screenshot: {e}")
             return "", f"Failed to take screenshot: {str(e)}"
-    
+
     def _handle_browser_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Handle browser-specific actions."""
         # Reuse BrowserSandboxClient logic
@@ -1858,15 +1858,15 @@ class UnifiedSandboxClient(SandboxClient):
         browser_client.execution_history = []
         browser_client._cached_browser_viewport = None
         feedback = browser_client.get_feedback(action)
-        
+
         # Merge history
         self.execution_history.extend(browser_client.execution_history)
         return feedback
-    
+
     def _handle_file_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Handle file-specific actions."""
         action_type = action.get("action_type")
-        
+
         try:
             if action_type == "file_read":
                 file_path = action.get("path") or action.get("file")
@@ -1879,7 +1879,7 @@ class UnifiedSandboxClient(SandboxClient):
                     message = f"File content (first 5000 chars):\n{content[:5000]}\n... (truncated, total {len(content)} chars)"
                 else:
                     message = f"File content:\n{content}"
-                
+
             elif action_type == "file_write":
                 file_path = action.get("path") or action.get("file")
                 content = action.get("content")
@@ -1889,7 +1889,7 @@ class UnifiedSandboxClient(SandboxClient):
                     raise ValueError("file_write requires 'content' parameter")
                 result = self.sdk_client.file.write_file(file=file_path, content=content)
                 message = f"Successfully wrote to {file_path}"
-                
+
             elif action_type == "file_list":
                 path = action.get("path")
                 if not path:
@@ -1897,7 +1897,7 @@ class UnifiedSandboxClient(SandboxClient):
                 result = self.sdk_client.file.list_path(path=path)
                 files = [f.name for f in result.data.files]
                 message = f"Files in {path} ({len(files)} items):\n" + "\n".join(files[:50]) + (f"\n... and {len(files) - 50} more" if len(files) > 50 else "")
-            
+
             elif action_type == "replace_in_file":
                 file_path = action.get("file")
                 old_str = action.get("old_text") or action.get("old_str")  # Support both for compatibility
@@ -1914,7 +1914,7 @@ class UnifiedSandboxClient(SandboxClient):
                     new_str=new_str
                 )
                 message = f"Successfully replaced text in {file_path}"
-                
+
             elif action_type == "search_in_file":
                 file_path = action.get("file")
                 regex = action.get("pattern") or action.get("regex")  # Support both for compatibility
@@ -1928,7 +1928,7 @@ class UnifiedSandboxClient(SandboxClient):
                 )
                 matches = result.data.matches if hasattr(result.data, 'matches') else []
                 message = f"Found {len(matches)} matches for '{regex}' in {file_path}"
-                
+
             elif action_type == "find_files":
                 path = action.get("path")
                 glob_pattern = action.get("glob")
@@ -1951,7 +1951,7 @@ class UnifiedSandboxClient(SandboxClient):
                     raise ValueError("str_replace_editor requires 'command' parameter")
                 if not path:
                     raise ValueError("str_replace_editor requires 'path' parameter")
-                
+
                 command_map = {
                     "view": Command.VIEW,
                     "create": Command.CREATE,
@@ -1962,7 +1962,7 @@ class UnifiedSandboxClient(SandboxClient):
                 if command not in command_map:
                     raise ValueError(f"str_replace_editor: invalid command '{command}'. Valid commands: {list(command_map.keys())}")
                 cmd_enum = command_map[command]
-                
+
                 kwargs = {"command": cmd_enum, "path": path}
                 if action.get("file_text"):
                     kwargs["file_text"] = action.get("file_text")
@@ -1974,49 +1974,49 @@ class UnifiedSandboxClient(SandboxClient):
                     kwargs["insert_line"] = action.get("insert_line")
                 if action.get("view_range"):
                     kwargs["view_range"] = action.get("view_range")
-                
+
                 result = self.sdk_client.file.str_replace_editor(**kwargs)
                 message = f"Editor command '{command}' executed on {path}"
-            
+
             elif action_type == "image_read":
                 import base64
                 file_path = action.get("path") or action.get("file")
                 if not file_path:
                     raise ValueError("image_read requires 'path' or 'file' parameter")
-                
+
                 image_data = b""
                 for chunk in self.sdk_client.file.download_file(path=file_path):
                     image_data += chunk
-                
+
                 if not image_data:
                     raise ValueError(f"Failed to read image file: {file_path} or file is empty")
-                
+
                 image_data = self._compress_image_bytes_for_claude(image_data)
                 base64_image = base64.b64encode(image_data).decode('utf-8')
                 message = f"Successfully read image from {file_path} ({len(image_data)} bytes)"
-                
+
                 # Return feedback with image_base64 (similar to screenshot)
                 feedback = {"done": False, "message": message}
                 feedback["image_base64"] = base64_image
                 self.execution_history.append({"action": action, "feedback": feedback})
                 logger.debug(f"Feedback (OBSERVATION): \n{colorize(json.dumps({**feedback, 'image_base64': f'<{len(base64_image)} chars>'}, indent=2), 'YELLOW')}")
                 return feedback
-            
+
             else:
                 message = f"Unknown file action: {action_type}"
-            
+
             feedback = {"done": False, "message": message}
             self.execution_history.append({"action": action, "feedback": feedback})
             logger.debug(f"Feedback (OBSERVATION): \n{colorize(json.dumps(feedback, indent=2), 'YELLOW')}")
             return feedback
-            
+
         except Exception as e:
             logger.error(f"Error executing file action: {e}")
             logger.exception("Full traceback:")
             feedback = {"done": False, "message": f"Error: {str(e)}"}
             self.execution_history.append({"action": action, "feedback": feedback})
             return feedback
-    
+
     def _handle_code_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Handle code execution actions."""
         try:
@@ -2051,21 +2051,21 @@ class UnifiedSandboxClient(SandboxClient):
             self.execution_history.append({"action": action, "feedback": feedback})
             logger.debug(f"Feedback (OBSERVATION): \n{colorize(json.dumps(feedback, indent=2), 'YELLOW')}")
             return feedback
-            
+
         except Exception as e:
             logger.error(f"Error executing code action: {e}")
             logger.exception("Full traceback:")
             feedback = {"done": False, "message": f"Error: {str(e)}"}
             self.execution_history.append({"action": action, "feedback": feedback})
             return feedback
-    
+
     def _handle_shell_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
         """Handle shell command execution."""
         try:
             command = action.get("command")
             if not command:
                 raise ValueError("shell_execute requires 'command' parameter")
-            
+
             # Ensure shell session exists before executing command
             if not self.shell_session_id:
                 try:
@@ -2075,7 +2075,7 @@ class UnifiedSandboxClient(SandboxClient):
                 except Exception as e:
                     logger.warning(f"Failed to create shell session, will let SDK auto-create: {e}")
                     # If session creation fails, let SDK auto-create by not passing id
-            
+
             # Execute command with session ID (or let SDK auto-create if session_id is None)
             try:
                 result = self.sdk_client.shell.exec_command(
@@ -2085,11 +2085,11 @@ class UnifiedSandboxClient(SandboxClient):
                     async_mode=False,
                     timeout=0
                 )
-                
+
                 # Update session_id in case SDK created a new one
                 if hasattr(result, 'data') and hasattr(result.data, 'session_id'):
                     self.shell_session_id = result.data.session_id
-                
+
                 output = result.data.output
                 message = output if output else "Command executed successfully (no output)"
             except Exception as session_error:
@@ -2101,7 +2101,7 @@ class UnifiedSandboxClient(SandboxClient):
                         session = self.sdk_client.shell.create_session(exec_dir="/home/gem")
                         self.shell_session_id = session.data.session_id
                         logger.debug(f"Created new shell session after error: {self.shell_session_id}")
-                        
+
                         # Retry command with new session
                         result = self.sdk_client.shell.exec_command(
                             command=command,
@@ -2117,28 +2117,28 @@ class UnifiedSandboxClient(SandboxClient):
                         raise retry_error
                 else:
                     raise session_error
-            
+
             feedback = {"done": False, "message": message}
             self.execution_history.append({"action": action, "feedback": feedback})
             logger.debug(f"Feedback (OBSERVATION): \n{colorize(json.dumps(feedback, indent=2), 'YELLOW')}")
             return feedback
-            
+
         except Exception as e:
             logger.error(f"Error executing shell action: {e}")
             logger.exception("Full traceback:")
             feedback = {"done": False, "message": f"Error: {str(e)}"}
             self.execution_history.append({"action": action, "feedback": feedback})
             return feedback
-    
+
     def get_history(self) -> list[Dict[str, Any]]:
         """Get the recorded execution history."""
         return self.execution_history
-    
+
     def clear_history(self) -> None:
         """Clear the execution history."""
         logger.debug(f"Clearing execution history ({len(self.execution_history)} entries)")
         self.execution_history = []
-    
+
     def create_environment(self, task: Dict[str, Any], wait_time: int = 60) -> bool:
         """Create and initialize the configured sandbox runtime."""
         if not super().create_environment(task, wait_time):

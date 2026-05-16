@@ -151,7 +151,7 @@ def execute_command_with_verification():
             timeout=120,
             creationflags=flags,
         )
-        
+
         # If no verification is needed, return immediately
         if not verification:
             return jsonify({
@@ -160,19 +160,19 @@ def execute_command_with_verification():
                 'error': result.stderr,
                 'returncode': result.returncode
             })
-        
+
         # Wait and verify the result
         import time
         start_time = time.time()
         while time.time() - start_time < max_wait_time:
             verification_passed = True
-            
+
             # Check window existence if specified
             if 'window_exists' in verification:
                 window_name = verification['window_exists']
                 try:
                     if platform_name == 'Linux':
-                        wmctrl_result = subprocess.run(['wmctrl', '-l'], 
+                        wmctrl_result = subprocess.run(['wmctrl', '-l'],
                                                      capture_output=True, text=True, check=True)
                         if window_name.lower() not in wmctrl_result.stdout.lower():
                             verification_passed = False
@@ -183,18 +183,18 @@ def execute_command_with_verification():
                             verification_passed = False
                 except Exception:
                     verification_passed = False
-            
+
             # Check command execution if specified
             if 'command_success' in verification:
                 verify_cmd = verification['command_success']
                 try:
-                    verify_result = subprocess.run(verify_cmd, shell=True, 
+                    verify_result = subprocess.run(verify_cmd, shell=True,
                                                  capture_output=True, text=True, timeout=5)
                     if verify_result.returncode != 0:
                         verification_passed = False
                 except Exception:
                     verification_passed = False
-            
+
             if verification_passed:
                 return jsonify({
                     'status': 'success',
@@ -204,9 +204,9 @@ def execute_command_with_verification():
                     'verification': 'passed',
                     'wait_time': time.time() - start_time
                 })
-            
+
             time.sleep(check_interval)
-        
+
         # Verification failed
         return jsonify({
             'status': 'verification_failed',
@@ -216,7 +216,7 @@ def execute_command_with_verification():
             'verification': 'failed',
             'wait_time': max_wait_time
         }), 500
-        
+
     except Exception as e:
         return jsonify({
             'status': 'error',
@@ -1138,10 +1138,10 @@ def get_file():
         # Check if the file exists and get its size
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
-        
+
         file_size = os.path.getsize(file_path)
         logger.info(f"Serving file: {file_path} ({file_size} bytes)")
-        
+
         # Check if the file exists and send it to the user
         return send_file(file_path, as_attachment=True)
     except FileNotFoundError:
@@ -1158,20 +1158,20 @@ def upload_file():
     if 'file_path' in request.form and 'file_data' in request.files:
         file_path = os.path.expandvars(os.path.expanduser(request.form['file_path']))
         file = request.files["file_data"]
-        
+
         try:
             # Ensure target directory exists
             target_dir = os.path.dirname(file_path)
             if target_dir:  # Only create directory if it's not empty
                 os.makedirs(target_dir, exist_ok=True)
-            
+
             # Save file and get size for verification
             file.save(file_path)
             uploaded_size = os.path.getsize(file_path)
-            
+
             logger.info(f"File uploaded successfully: {file_path} ({uploaded_size} bytes)")
             return f"File Uploaded: {uploaded_size} bytes"
-            
+
         except Exception as e:
             logger.error(f"Error uploading file to {file_path}: {e}")
             # Clean up partial file if it exists
@@ -1239,13 +1239,13 @@ def download_file():
 
     max_retries = 3
     error: Optional[Exception] = None
-    
+
     for i in range(max_retries):
         try:
             logger.info(f"Download attempt {i+1}/{max_retries} for {url}")
             response = requests.get(url, stream=True, timeout=300)
             response.raise_for_status()
-            
+
             # Get expected file size if available
             total_size = int(response.headers.get('content-length', 0))
             if total_size > 0:
@@ -1260,12 +1260,12 @@ def download_file():
                         if total_size > 0 and downloaded_size % (1024*1024) == 0:  # Log every MB
                             progress = (downloaded_size / total_size) * 100
                             logger.info(f"Download progress: {progress:.1f}%")
-            
+
             # Verify download completeness
             actual_size = os.path.getsize(path)
             if total_size > 0 and actual_size != total_size:
                 raise Exception(f"Download incomplete. Expected {total_size} bytes, got {actual_size} bytes")
-            
+
             logger.info(f"File downloaded successfully: {path} ({actual_size} bytes)")
             return f"File downloaded successfully: {actual_size} bytes"
 
@@ -1294,7 +1294,7 @@ def open_file():
 
     # Check if it's a file path that exists
     is_file_path = path_obj.exists()
-    
+
     # If it's not a file path, treat it as an application name/command
     if not is_file_path:
         # Check if it's a valid command by trying to find it in PATH
@@ -1579,15 +1579,15 @@ def run_python():
     # Create a temporary file to save the Python code
     import tempfile
     import uuid
-    
+
     # Generate unique filename
     temp_filename = f"/tmp/python_exec_{uuid.uuid4().hex}.py"
-    
+
     try:
         # Write code to temporary file
         with open(temp_filename, 'w') as f:
             f.write(code)
-        
+
         # Execute the file using subprocess to capture all output
         result = subprocess.run(
             ['/usr/bin/python3', temp_filename],
@@ -1596,22 +1596,22 @@ def run_python():
             text=True,
             timeout=30  # 30 second timeout
         )
-        
+
         # Clean up the temporary file
         try:
             os.remove(temp_filename)
         except:
             pass  # Ignore cleanup errors
-        
+
         # Prepare response
         output = result.stdout
         error_output = result.stderr
-        
+
         # Combine output and errors if both exist
         combined_message = output
         if error_output:
             combined_message += ('\n' + error_output) if output else error_output
-        
+
         # Determine status based on return code and errors
         if result.returncode != 0:
             status = 'error'
@@ -1621,7 +1621,7 @@ def run_python():
                 combined_message = combined_message + '\n' + error_output if combined_message else error_output
         else:
             status = 'success'
-        
+
         return jsonify({
             'status': status,
             'message': combined_message,
@@ -1630,14 +1630,14 @@ def run_python():
             'error': error_output,   # stderr only
             'return_code': result.returncode
         })
-        
+
     except subprocess.TimeoutExpired:
         # Clean up the temporary file on timeout
         try:
             os.remove(temp_filename)
         except:
             pass
-            
+
         return jsonify({
             'status': 'error',
             'message': 'Execution timeout: Code took too long to execute',
@@ -1645,14 +1645,14 @@ def run_python():
             'need_more': False,
             'output': None,
         }), 500
-        
+
     except Exception as e:
         # Clean up the temporary file on error
         try:
             os.remove(temp_filename)
         except:
             pass
-            
+
         # Capture the exception details
         return jsonify({
             'status': 'error',
@@ -1669,7 +1669,7 @@ def run_bash_script():
     script = data.get('script', None)
     timeout = data.get('timeout', 100)  # Default timeout of 30 seconds
     working_dir = data.get('working_dir', None)
-    
+
     if not script:
         return jsonify({
             'status': 'error',
@@ -1677,7 +1677,7 @@ def run_bash_script():
             'error': "",  # Always empty as requested
             'returncode': -1
         }), 400
-    
+
     # Expand user directory if provided
     if working_dir:
         working_dir = os.path.expanduser(working_dir)
@@ -1688,7 +1688,7 @@ def run_bash_script():
                 'error': "",  # Always empty as requested
                 'returncode': -1
             }), 400
-    
+
     # Create a temporary script file
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp_file:
@@ -1696,11 +1696,11 @@ def run_bash_script():
             script = "#!/bin/bash\n\n" + script
         tmp_file.write(script)
         tmp_file_path = tmp_file.name
-    
+
     try:
         # Make the script executable
         os.chmod(tmp_file_path, 0o755)
-        
+
         # Execute the script
         if platform_name == "Windows":
             # On Windows, use Git Bash or WSL if available, otherwise cmd
@@ -1729,19 +1729,19 @@ def run_bash_script():
                 creationflags=flags,
                 shell=False
             )
-        
+
         # Log the command execution for trajectory recording
-        _append_event("BashScript", 
-                      {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode}, 
+        _append_event("BashScript",
+                      {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode},
                       ts=time.time())
-        
+
         return jsonify({
             'status': 'success' if result.returncode == 0 else 'error',
             'output': result.stdout,  # Contains both stdout and stderr merged
             'error': "",  # Always empty as requested
             'returncode': result.returncode
         })
-        
+
     except subprocess.TimeoutExpired:
         return jsonify({
             'status': 'error',
@@ -1761,11 +1761,11 @@ def run_bash_script():
                 cwd=working_dir,
                 shell=False
             )
-            
-            _append_event("BashScript", 
-                          {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode}, 
+
+            _append_event("BashScript",
+                          {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode},
                           ts=time.time())
-            
+
             return jsonify({
                 'status': 'success' if result.returncode == 0 else 'error',
                 'output': result.stdout,  # Contains both stdout and stderr merged

@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 def get_browser_tools() -> List[Dict[str, Any]]:
     """Get OpenAI tool definitions for browser actions.
-    
+
     Returns:
         List of tool definitions in OpenAI format
     """
@@ -528,13 +528,13 @@ def get_browser_tools() -> List[Dict[str, Any]]:
             }
         }
     ]
-    
+
     return tools
 
 
 def get_file_tools() -> List[Dict[str, Any]]:
     """Get OpenAI tool definitions for file operations.
-    
+
     Returns:
         List of tool definitions in OpenAI format
     """
@@ -738,13 +738,13 @@ def get_file_tools() -> List[Dict[str, Any]]:
             }
         }
     ]
-    
+
     return tools
 
 
 def get_code_tools() -> List[Dict[str, Any]]:
     """Get OpenAI tool definitions for code execution.
-    
+
     Returns:
         List of tool definitions in OpenAI format
     """
@@ -792,13 +792,13 @@ def get_code_tools() -> List[Dict[str, Any]]:
             }
         }
     ]
-    
+
     return tools
 
 
 def get_shell_tools() -> List[Dict[str, Any]]:
     """Get OpenAI tool definitions for shell operations.
-    
+
     Returns:
         List of tool definitions in OpenAI format
     """
@@ -837,13 +837,13 @@ def get_shell_tools() -> List[Dict[str, Any]]:
             }
         }
     ]
-    
+
     return tools
 
 
 def get_unified_tools() -> List[Dict[str, Any]]:
     """Get unified OpenAI tool definitions combining all sandbox capabilities.
-    
+
     Returns:
         List of tool definitions in OpenAI format combining browser, file, code, and shell tools
     """
@@ -852,11 +852,11 @@ def get_unified_tools() -> List[Dict[str, Any]]:
     file_tools = get_file_tools()
     code_tools = get_code_tools()
     shell_tools = get_shell_tools()
-    
+
     # Combine all tools, removing duplicate task_complete
     all_tools = []
     task_complete_added = False
-    
+
     for tool_set in [browser_tools, file_tools, code_tools, shell_tools]:
         for tool in tool_set:
             tool_name = tool["function"]["name"]
@@ -866,20 +866,20 @@ def get_unified_tools() -> List[Dict[str, Any]]:
                     task_complete_added = True
             else:
                 all_tools.append(tool)
-    
+
     return all_tools
 
 
 def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Map a tool call to a sandbox action.
-    
+
     Args:
         tool_name: Name of the tool being called
         arguments: Tool arguments
-        
+
     Returns:
         Action dictionary for the sandbox client
-        
+
     Raises:
         ValueError: If invalid parameters are provided for a tool
     """
@@ -922,7 +922,7 @@ def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[s
         "shell_execute": {"command"},
         "task_complete": {"result"},
     }
-    
+
     # Validate parameters if tool is in the validation map
     if tool_name in tool_valid_params:
         valid_params = tool_valid_params[tool_name]
@@ -935,15 +935,14 @@ def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[s
             )
         # Filter to only valid parameters (in case of typos or extra params)
         arguments = {k: v for k, v in arguments.items() if k in valid_params}
-    
+
     # Validate that tool_name is known
     valid_tools = set(tool_valid_params.keys())
     if tool_name not in valid_tools:
         raise ValueError(f"Unknown tool: {tool_name}")
-    
+
     # Build action with tool name as action_type (no mapping needed)
     action = {"action_type": tool_name}
     action.update(arguments)
-    
-    return action
 
+    return action

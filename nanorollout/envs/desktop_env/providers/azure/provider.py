@@ -43,7 +43,7 @@ class AzureProvider(Provider):
         if power_state == "PowerState/running":
             logger.info("VM is already running.")
             return
-        
+
         try:
             # Start the instance
             for _ in range(MAX_ATTEMPTS):

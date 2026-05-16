@@ -140,10 +140,10 @@ def _allocate_vm(screen_size=(1920, 1080)):
                 ),
                 deletion_protection=False,
             )
-            
+
             if ALIYUN_RESOURCE_GROUP_ID:
                 kwargs["resource_group_id"] = ALIYUN_RESOURCE_GROUP_ID
-            
+
             if with_ttl and ttl_enabled and ttl_seconds > 0:
                 kwargs["auto_release_time"] = auto_release_str
             return ecs_models.RunInstancesRequest(**kwargs)
