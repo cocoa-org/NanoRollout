@@ -546,10 +546,11 @@ class UnifiedSandboxClient(SandboxClient):
     Routes by ``action_type``:
 
     * ``computer_use_*`` -> :class:`ComputerUseSandboxClient` (GUI control)
-    * ``file_*``, ``replace_in_file``, ``search_in_file``, ``find_files``,
-      ``image_read``, ``str_replace_editor`` -> agent-infra/sandbox file API
-    * ``code_execute`` -> sandbox code API
-    * ``shell_execute`` (or any ``{command: ...}`` payload) -> sandbox shell
+    * ``editor`` (view / create / str_replace / insert / undo_edit) ->
+      agent-infra/sandbox file API. ``view`` on image extensions returns
+      the file as base64 (subsumes legacy ``image_read``).
+    * ``python`` (``{code: str}``) -> sandbox code API
+    * ``bash`` (``{command: str}``) -> sandbox shell
     * ``task_complete`` / ``exit`` -> terminates the rollout loop
     """
 
@@ -635,17 +636,13 @@ class UnifiedSandboxClient(SandboxClient):
             if isinstance(action_type, str) and action_type.startswith(COMPUTER_USE_ACTION_PREFIX):
                 return self._handle_computer_use_action(action)
 
-            if action_type in {
-                "file_read", "file_write", "file_list",
-                "replace_in_file", "search_in_file", "find_files",
-                "str_replace_editor", "image_read",
-            }:
+            if action_type == "editor":
                 return self._handle_file_action(action)
 
-            if action_type == "code_execute":
+            if action_type == "python":
                 return self._handle_code_action(action)
 
-            if action_type == "shell_execute" or action.get("command"):
+            if action_type == "bash" or action.get("command"):
                 return self._handle_shell_action(action)
 
             message = f"Unknown action type: {action_type}"
@@ -672,121 +669,35 @@ class UnifiedSandboxClient(SandboxClient):
         self.execution_history.extend(self._computer_use.execution_history[-1:])
         return feedback
 
+    _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
     def _handle_file_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle file-specific actions."""
-        action_type = action.get("action_type")
+        """Handle ``editor`` actions (view / create / str_replace / insert / undo_edit).
+
+        Replaces the legacy 8-tool file family. ``view`` on an image file
+        downloads it and returns base64 (subsumes the old ``image_read``).
+        """
+        from agent_sandbox.file.types import Command
 
         try:
-            if action_type == "file_read":
-                file_path = action.get("path") or action.get("file")
-                if not file_path:
-                    raise ValueError("file_read requires 'path' or 'file' parameter")
-                result = self.sdk_client.file.read_file(file=file_path)
-                content = result.data.content
-                if len(content) > 5000:
-                    message = f"File content (first 5000 chars):\n{content[:5000]}\n... (truncated, total {len(content)} chars)"
-                else:
-                    message = f"File content:\n{content}"
+            command = action.get("command")
+            path = action.get("path")
+            if not command:
+                raise ValueError("editor requires 'command' parameter")
+            if not path:
+                raise ValueError("editor requires 'path' parameter")
 
-            elif action_type == "file_write":
-                file_path = action.get("path") or action.get("file")
-                content = action.get("content")
-                if not file_path:
-                    raise ValueError("file_write requires 'path' or 'file' parameter")
-                if content is None:
-                    raise ValueError("file_write requires 'content' parameter")
-                self.sdk_client.file.write_file(file=file_path, content=content)
-                message = f"Successfully wrote to {file_path}"
-
-            elif action_type == "file_list":
-                path = action.get("path")
-                if not path:
-                    raise ValueError("file_list requires 'path' parameter")
-                result = self.sdk_client.file.list_path(path=path)
-                files = [f.name for f in result.data.files]
-                message = (
-                    f"Files in {path} ({len(files)} items):\n"
-                    + "\n".join(files[:50])
-                    + (f"\n... and {len(files) - 50} more" if len(files) > 50 else "")
-                )
-
-            elif action_type == "replace_in_file":
-                file_path = action.get("file")
-                old_str = action.get("old_text") or action.get("old_str")
-                new_str = action.get("new_text") or action.get("new_str")
-                if not file_path:
-                    raise ValueError("replace_in_file requires 'file' parameter")
-                if old_str is None:
-                    raise ValueError("replace_in_file requires 'old_text' or 'old_str' parameter")
-                if new_str is None:
-                    raise ValueError("replace_in_file requires 'new_text' or 'new_str' parameter")
-                self.sdk_client.file.replace_in_file(file=file_path, old_str=old_str, new_str=new_str)
-                message = f"Successfully replaced text in {file_path}"
-
-            elif action_type == "search_in_file":
-                file_path = action.get("file")
-                regex = action.get("pattern") or action.get("regex")
-                if not file_path:
-                    raise ValueError("search_in_file requires 'file' parameter")
-                if not regex:
-                    raise ValueError("search_in_file requires 'pattern' or 'regex' parameter")
-                result = self.sdk_client.file.search_in_file(file=file_path, regex=regex)
-                matches = result.data.matches if hasattr(result.data, "matches") else []
-                message = f"Found {len(matches)} matches for '{regex}' in {file_path}"
-
-            elif action_type == "find_files":
-                path = action.get("path")
-                glob_pattern = action.get("glob")
-                if not path:
-                    raise ValueError("find_files requires 'path' parameter")
-                if not glob_pattern:
-                    raise ValueError("find_files requires 'glob' parameter")
-                result = self.sdk_client.file.find_files(path=path, glob=glob_pattern)
-                files = result.data.files if result.data.files else []
-                message = f"Found {len(files)} files matching '{glob_pattern}'"
-
-            elif action_type == "str_replace_editor":
-                from agent_sandbox.file.types import Command
-                command = action.get("command")
-                path = action.get("path")
-                if not command:
-                    raise ValueError("str_replace_editor requires 'command' parameter")
-                if not path:
-                    raise ValueError("str_replace_editor requires 'path' parameter")
-
-                command_map = {
-                    "view": Command.VIEW,
-                    "create": Command.CREATE,
-                    "str_replace": Command.STR_REPLACE,
-                    "insert": Command.INSERT,
-                    "undo_edit": Command.UNDO_EDIT,
-                }
-                if command not in command_map:
-                    raise ValueError(
-                        f"str_replace_editor: invalid command '{command}'. Valid: {list(command_map)}"
-                    )
-                kwargs: Dict[str, Any] = {"command": command_map[command], "path": path}
-                for opt in ("file_text", "old_str", "new_str", "insert_line", "view_range"):
-                    if action.get(opt):
-                        kwargs[opt] = action.get(opt)
-                self.sdk_client.file.str_replace_editor(**kwargs)
-                message = f"Editor command '{command}' executed on {path}"
-
-            elif action_type == "image_read":
-                file_path = action.get("path") or action.get("file")
-                if not file_path:
-                    raise ValueError("image_read requires 'path' or 'file' parameter")
-
+            # ``view`` on an image file: download bytes and return as image
+            # block. (Subsumes the legacy image_read tool.)
+            if command == "view" and isinstance(path, str) and path.lower().endswith(self._IMAGE_EXTENSIONS):
                 image_data = b""
-                for chunk in self.sdk_client.file.download_file(path=file_path):
+                for chunk in self.sdk_client.file.download_file(path=path):
                     image_data += chunk
                 if not image_data:
-                    raise ValueError(f"Failed to read image file: {file_path} or file is empty")
-
+                    raise ValueError(f"Failed to read image file: {path} or file is empty")
                 image_data = self._compress_image_bytes_for_claude(image_data)
                 base64_image = base64.b64encode(image_data).decode("utf-8")
-                message = f"Successfully read image from {file_path} ({len(image_data)} bytes)"
-
+                message = f"Read image from {path} ({len(image_data)} bytes)"
                 feedback = {"done": False, "message": message, "image_base64": base64_image}
                 self.execution_history.append({"action": action, "feedback": feedback})
                 logger.debug(
@@ -795,8 +706,43 @@ class UnifiedSandboxClient(SandboxClient):
                 )
                 return feedback
 
+            # All other commands go through the str_replace_editor SDK.
+            command_map = {
+                "view": Command.VIEW,
+                "create": Command.CREATE,
+                "str_replace": Command.STR_REPLACE,
+                "insert": Command.INSERT,
+                "undo_edit": Command.UNDO_EDIT,
+            }
+            if command not in command_map:
+                raise ValueError(
+                    f"editor: invalid command '{command}'. Valid: {list(command_map)}"
+                )
+            kwargs: Dict[str, Any] = {"command": command_map[command], "path": path}
+            for opt in ("file_text", "old_str", "new_str", "insert_line", "view_range"):
+                if action.get(opt) is not None:
+                    kwargs[opt] = action.get(opt)
+            result = self.sdk_client.file.str_replace_editor(**kwargs)
+            # The SDK call returns the command-specific output (file content
+            # for view, ack for create/str_replace/insert/undo_edit). Surface
+            # what we have.
+            output = ""
+            if result is not None and hasattr(result, "data"):
+                data = result.data
+                output = (
+                    getattr(data, "content", None)
+                    or getattr(data, "output", None)
+                    or ""
+                )
+            if command == "view":
+                if not isinstance(output, str):
+                    output = str(output)
+                if len(output) > 5000:
+                    message = f"{path} (first 5000 chars):\n{output[:5000]}\n... (truncated, total {len(output)} chars)"
+                else:
+                    message = f"{path}:\n{output}" if output else f"editor view {path}: (empty)"
             else:
-                message = f"Unknown file action: {action_type}"
+                message = f"editor {command} on {path}: ok"
 
             feedback = {"done": False, "message": message}
             self.execution_history.append({"action": action, "feedback": feedback})
@@ -811,16 +757,19 @@ class UnifiedSandboxClient(SandboxClient):
             return feedback
 
     def _handle_code_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle code execution actions."""
+        """Handle ``python`` action (rename of legacy code_execute).
+
+        Python-only; the legacy ``language`` / ``timeout`` parameters were
+        dropped to mirror anthropic-quickstarts' PythonTool. If you need
+        another runtime, use ``bash`` to invoke it.
+        """
         try:
             code = action.get("code")
             if not code:
-                raise ValueError("code_execute requires 'code' parameter")
-            language = action.get("language", "python")
-            timeout = action.get("timeout")
+                raise ValueError("python requires 'code' parameter")
 
             result = self.sdk_client.code.execute_code(
-                language=language, code=code, timeout=timeout
+                language="python", code=code
             )
 
             data = result.data
@@ -854,7 +803,7 @@ class UnifiedSandboxClient(SandboxClient):
         try:
             command = action.get("command")
             if not command:
-                raise ValueError("shell_execute requires 'command' parameter")
+                raise ValueError("bash requires 'command' parameter")
 
             if not self.shell_session_id:
                 try:

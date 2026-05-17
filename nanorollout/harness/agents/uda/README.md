@@ -117,11 +117,25 @@ multiple actions in one turn.
 
 | `client_type` | Tool set | Count |
 |---|---|---|
-| `unified` (default) | computer_use + computer_batch + 8× file + code + shell + task_complete | **13** |
+| `unified` (default) | computer_use + computer_batch + editor + python + bash + task_complete | **6** |
 | `computer-use` | computer_use + computer_batch + task_complete | 3 |
-| `file` | 8× file + task_complete | 9 |
-| `code` / `jupyter` | code_execute + task_complete | 2 |
-| `shell` | shell_execute + task_complete | 2 |
+| `file` | editor + task_complete | 2 |
+| `code` / `jupyter` | python + task_complete | 2 |
+| `shell` | bash + task_complete | 2 |
+
+Names align 1:1 with `anthropic-quickstarts/computer-use-best-practices/computer_use/tools/`:
+`editor` (was `str_replace_editor` + 7 single-purpose file_* tools),
+`python` (was `code_execute`, dropped `language`/`timeout` — Python-only),
+`bash` (was `shell_execute`). `task_complete` is our addition — verifiers
+hook into its `result` payload; best-practices uses `stop_reason="end_turn"`
+instead, which doesn't fit our verifier model.
+
+Legacy names (`shell_execute`, `code_execute`, `str_replace_editor`,
+`file_read`, `file_write`, `file_list`, `replace_in_file`, `image_read`)
+are still parseable in `map_tool_call_to_action` — they get remapped to
+the new shape transparently, so fine-tuned models trained on the old
+schema keep working. `search_in_file` / `find_files` are dropped with no
+remap (use `bash` with `grep` / `find` instead).
 
 `map_tool_call_to_action(tool_name, arguments)` in `tools.py`:
 

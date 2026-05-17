@@ -74,14 +74,16 @@ screen 1920x1080.
 
 
 _FILE = """\
-Filesystem is rooted at ``/home/kasm-user/``. Use ``image_read`` to inspect
-images — never dump raw bytes / base64 / pixel arrays via ``code_execute``.
+Filesystem is rooted at ``/home/kasm-user/``. Use ``editor view <path>``
+to inspect any file — for image extensions (.png/.jpg/.jpeg/.gif/.webp/.bmp)
+it returns the file as a base64 image block; for text it returns numbered
+lines. Never dump raw bytes / base64 / pixel arrays via ``python``.
 """
 
 
 _CODE = """\
-``code_execute`` and ``shell_execute`` both run at ``/home/kasm-user/``.
-Never print raw image bytes / base64 / pixel arrays — only short metadata.
+``python`` and ``bash`` both run at ``/home/kasm-user/``. Never print raw
+image bytes / base64 / pixel arrays — only short metadata.
 """
 
 
@@ -91,11 +93,11 @@ _SHELL = _CODE  # combined guidance covers both; keep symbol for client_type=she
 _CROSS_TOOL = """\
 Cross-tool workflow:
 * For downloads, computation, parsing, or anything with a CLI/API — prefer
-  shell or code over clicking. Only fall back to a GUI download button when
-  the URL is behind JS / session state a fetch can't replicate.
+  ``bash`` / ``python`` over clicking. Only fall back to a GUI download
+  button when the URL is behind JS / session state a fetch can't replicate.
 * Verify file outputs (existence, size, parseability) after writing.
 * Stop after ~6 consecutive GUI actions without verified progress — drop
-  to shell / code or call ``task_complete(result="failure_summary: …")``.
+  to ``bash`` / ``python`` or call ``task_complete(result="failure_summary: …")``.
 """
 
 

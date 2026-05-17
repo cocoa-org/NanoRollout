@@ -215,312 +215,135 @@ def get_computer_use_tools() -> List[Dict[str, Any]]:
 
 
 def get_file_tools() -> List[Dict[str, Any]]:
-    """Get OpenAI tool definitions for file operations.
+    """File-side tools — a single ``editor`` modeled on best-practices.
 
-    Returns:
-        List of tool definitions in OpenAI format
+    Replaces the legacy 8-tool file family (file_read/write/list,
+    replace_in_file, search_in_file, find_files, image_read,
+    str_replace_editor) with a single ``editor`` tool whose ``command``
+    enum covers view/create/str_replace/insert (+ ``undo_edit`` for the
+    in-sandbox SDK; best-practices drops it but we keep it because
+    agent-infra exposes it). Schema mirrors
+    anthropic-quickstarts/computer-use-best-practices/computer_use/tools/editor.py.
+
+    ``editor view`` on an image file (.png/.jpg/.jpeg/.gif/.webp/.bmp)
+    returns the file as a base64 image — the model sees the pixels.
+    Lists / greps / finds: use ``bash`` instead.
     """
-    tools = [
+    return [
         {
             "type": "function",
             "function": {
-                "name": "file_read",
-                "description": "Read file contents",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to the file to read"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "file_write",
-                "description": "Write content to a file",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to the file to write"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Content to write to the file"
-                        }
-                    },
-                    "required": ["path", "content"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "file_list",
-                "description": "List files in a directory",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to the directory to list"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "replace_in_file",
-                "description": "Replace text in a file",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file": {
-                            "type": "string",
-                            "description": "Absolute path to the file"
-                        },
-                        "old_text": {
-                            "type": "string",
-                            "description": "Text to replace (will be converted to old_str for API)"
-                        },
-                        "new_text": {
-                            "type": "string",
-                            "description": "Replacement text (will be converted to new_str for API)"
-                        }
-                    },
-                    "required": ["file", "old_text", "new_text"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_in_file",
-                "description": "Search for text in a file using regex pattern",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file": {
-                            "type": "string",
-                            "description": "Absolute path to the file"
-                        },
-                        "pattern": {
-                            "type": "string",
-                            "description": "Regular expression pattern to search for (will be converted to regex for API)"
-                        }
-                    },
-                    "required": ["file", "pattern"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "find_files",
-                "description": "Find files matching a glob pattern",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Directory path to search in"
-                        },
-                        "glob": {
-                            "type": "string",
-                            "description": "Glob pattern (e.g., '*.py', '**/*.txt')"
-                        }
-                    },
-                    "required": ["path", "glob"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "image_read",
-                "description": "Read an image file (PNG, JPG, etc.) and return it as base64-encoded image for visual analysis. Use this to read visualization files generated by code (e.g., matplotlib plots, saved figures). The image will be automatically included in subsequent prompts for analysis.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to the image file to read (supports PNG, JPG, JPEG formats)"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "str_replace_editor",
-                "description": "Advanced file editor with view, create, str_replace, insert, undo_edit commands",
+                "name": "editor",
+                "description": (
+                    "View, create, and edit files inside the sandbox at "
+                    "/home/kasm-user/. ``view`` shows a file (text with line "
+                    "numbers, image as a base64 image, directory as a "
+                    "listing). ``create`` writes a new file with file_text. "
+                    "``str_replace`` swaps a unique occurrence of old_str for "
+                    "new_str. ``insert`` inserts new_str after a line. "
+                    "``undo_edit`` reverts the most recent edit."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
                             "enum": ["view", "create", "str_replace", "insert", "undo_edit"],
-                            "description": "Editor command to execute"
+                            "description": (
+                                "* view: show a file (text+line numbers; "
+                                "image returned as base64 if extension is "
+                                ".png/.jpg/.jpeg/.gif/.webp/.bmp) or list a "
+                                "directory.\n"
+                                "* create: create/overwrite a file with `file_text`.\n"
+                                "* str_replace: replace the unique occurrence "
+                                "of `old_str` with `new_str` in `path`. Fails "
+                                "if `old_str` is missing or not unique.\n"
+                                "* insert: insert `new_str` after line "
+                                "`insert_line` (0 inserts at the top).\n"
+                                "* undo_edit: undo the most recent edit on "
+                                "this file."
+                            ),
                         },
                         "path": {
                             "type": "string",
-                            "description": "Absolute path to file or directory"
+                            "description": (
+                                "Path relative to /home/kasm-user/ or an "
+                                "absolute path under that root."
+                            ),
                         },
-                        "file_text": {
-                            "type": "string",
-                            "description": "File content for 'create' command"
-                        },
-                        "old_str": {
-                            "type": "string",
-                            "description": "String to replace for 'str_replace' command"
-                        },
-                        "new_str": {
-                            "type": "string",
-                            "description": "New string for 'str_replace' or 'insert' command"
-                        },
-                        "insert_line": {
-                            "type": "integer",
-                            "description": "Line number for 'insert' command"
-                        },
+                        "file_text": {"type": "string"},
+                        "old_str": {"type": "string"},
+                        "new_str": {"type": "string"},
+                        "insert_line": {"type": "integer", "minimum": 0},
                         "view_range": {
                             "type": "array",
                             "items": {"type": "integer"},
-                            "description": "Line range for 'view' command [start, end]"
-                        }
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description": "[start, end] 1-indexed; -1 for end means EOF.",
+                        },
                     },
-                    "required": ["command", "path"]
-                }
-            }
+                    "required": ["command", "path"],
+                },
+            },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "task_complete",
-                "description": "Mark the task as complete and exit. Optionally provide the final result/answer if the task requires returning a specific output (e.g., JSON answer). For tasks that generate files in the sandbox, you can omit the result parameter.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "result": {
-                            "type": "string",
-                            "description": "Optional: The final result or answer for the task (e.g., JSON string). Use this when the task requires returning a specific output. For tasks that generate files, omit this parameter."
-                        }
-                    }
-                }
-            }
-        }
     ]
-
-    return tools
 
 
 def get_code_tools() -> List[Dict[str, Any]]:
-    """Get OpenAI tool definitions for code execution.
+    """Code execution — a single ``python`` tool, Python-only.
 
-    Returns:
-        List of tool definitions in OpenAI format
+    Replaces the legacy ``code_execute(code, language?, timeout?)`` which
+    accepted ``language`` (always python in practice) and an unused
+    ``timeout``. Schema mirrors best-practices PythonTool.
     """
-    tools = [
+    return [
         {
             "type": "function",
             "function": {
-                "name": "code_execute",
-                "description": "Execute code via sandbox runtime (python default). Returns stdout/stderr.",
+                "name": "python",
+                "description": (
+                    "Run a Python 3 script inside the sandbox runtime. "
+                    "Working directory is /home/kasm-user/. Returns "
+                    "stdout/stderr. Never print raw image bytes / base64 / "
+                    "pixel arrays — only short metadata (size, dimensions, "
+                    "format)."
+                ),
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "Source code to execute"
-                        },
-                        "language": {
-                            "type": "string",
-                            "enum": ["python", "javascript"],
-                            "description": "Runtime language (default python)"
-                        },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "Optional timeout in seconds"
-                        }
-                    },
-                    "required": ["code"]
-                }
-            }
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "task_complete",
-                "description": "Mark the task as complete and exit. Optionally provide the final result/answer if the task requires returning a specific output (e.g., JSON answer). For tasks that generate files in the sandbox, you can omit the result parameter.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "result": {
-                            "type": "string",
-                            "description": "Optional: The final result or answer for the task (e.g., JSON string). Use this when the task requires returning a specific output. For tasks that generate files, omit this parameter."
-                        }
-                    }
-                }
-            }
-        }
     ]
-
-    return tools
 
 
 def get_shell_tools() -> List[Dict[str, Any]]:
-    """Get OpenAI tool definitions for shell operations.
+    """Shell execution — a single ``bash`` tool.
 
-    Returns:
-        List of tool definitions in OpenAI format
+    Replaces the legacy ``shell_execute`` (functionally identical, just
+    aligned in name with best-practices BashTool).
     """
-    tools = [
+    return [
         {
             "type": "function",
             "function": {
-                "name": "shell_execute",
-                "description": "Execute a shell command and get the output",
+                "name": "bash",
+                "description": (
+                    "Run a bash command inside the sandbox. Working directory "
+                    "is /home/kasm-user/. Returns stdout/stderr. Prefer "
+                    "wget/curl over a GUI download button, and grep/find over "
+                    "screenshotting an editor."
+                ),
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Shell command to execute"
-                        }
-                    },
-                    "required": ["command"]
-                }
-            }
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "task_complete",
-                "description": "Mark the task as complete and exit. Optionally provide the final result/answer if the task requires returning a specific output (e.g., JSON answer). For tasks that generate files in the sandbox, you can omit the result parameter.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "result": {
-                            "type": "string",
-                            "description": "Optional: The final result or answer for the task (e.g., JSON string). Use this when the task requires returning a specific output. For tasks that generate files, omit this parameter."
-                        }
-                    }
-                }
-            }
-        }
     ]
-
-    return tools
 
 
 def get_unified_tools() -> List[Dict[str, Any]]:
@@ -580,17 +403,38 @@ _COMPUTER_USE_VALID_PARAMS: Dict[str, set] = {
 }
 
 _OTHER_TOOL_VALID_PARAMS: Dict[str, set] = {
-    "file_read": {"path"},
-    "file_write": {"path", "content"},
-    "file_list": {"path"},
-    "replace_in_file": {"file", "old_text", "new_text"},
-    "search_in_file": {"file", "pattern"},
-    "find_files": {"path", "glob"},
-    "image_read": {"path"},
-    "str_replace_editor": {"command", "path", "file_text", "old_str", "new_str", "insert_line", "view_range"},
-    "code_execute": {"code", "language", "timeout"},
-    "shell_execute": {"command"},
+    # Aligned with anthropic-quickstarts/computer-use-best-practices.
+    "editor": {"command", "path", "file_text", "old_str", "new_str", "insert_line", "view_range"},
+    "python": {"code"},
+    "bash": {"command"},
     "task_complete": {"result"},
+}
+
+# Legacy → new aliases. Old tool names are quietly remapped so that any
+# fine-tuned model still emitting them keeps working. The current
+# ``get_*_tools()`` only expose the new names, so over time these aliases
+# stop firing in practice.
+_LEGACY_TOOL_ALIASES: Dict[str, str] = {
+    "shell_execute": "bash",
+    "code_execute": "python",
+    "str_replace_editor": "editor",
+    # The 7 single-purpose file_* tools all collapse onto editor commands:
+    "file_read": "editor",
+    "file_write": "editor",
+    "file_list": "editor",
+    "replace_in_file": "editor",
+    "image_read": "editor",
+}
+
+# Legacy file_* arguments → editor argument shape. ``command`` is filled
+# in below by the dispatcher.
+_LEGACY_FILE_TOOL_TO_EDITOR_COMMAND: Dict[str, str] = {
+    "file_read": "view",
+    "file_write": "create",
+    "file_list": "view",
+    "replace_in_file": "str_replace",
+    "image_read": "view",
+    "str_replace_editor": "",  # already shaped like editor; passes through
 }
 
 
@@ -664,7 +508,14 @@ def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[s
         cleaned = _validate_computer_use_args(action_name, arguments)
         return {"action_type": tool_name, **cleaned}
 
-    # --- Everything else (file_*, code, shell, task_complete, editor) -- #
+    # --- Legacy aliases (best-practices alignment) ---------------------- #
+    if tool_name in _LEGACY_TOOL_ALIASES:
+        new_name = _LEGACY_TOOL_ALIASES[tool_name]
+        if new_name == "editor":
+            arguments = _normalize_legacy_file_args(tool_name, arguments)
+        tool_name = new_name
+
+    # --- bash / python / editor / task_complete -------------------------- #
     if tool_name not in _OTHER_TOOL_VALID_PARAMS:
         raise ValueError(f"Unknown tool: {tool_name}")
     valid_params = _OTHER_TOOL_VALID_PARAMS[tool_name]
@@ -677,3 +528,37 @@ def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[s
         )
     cleaned = {k: v for k, v in arguments.items() if k in valid_params}
     return {"action_type": tool_name, **cleaned}
+
+
+def _normalize_legacy_file_args(legacy_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Adapt a legacy file_*-tool argument bag into the new ``editor`` shape.
+
+    Handles the rename: file_read/file_list/image_read → editor view,
+    file_write → editor create, replace_in_file → editor str_replace.
+    Field renames (``old_text``→``old_str``, ``new_text``→``new_str``,
+    ``file``→``path``) happen here so the rest of the pipeline only ever
+    sees ``editor`` shape.
+    """
+    command = _LEGACY_FILE_TOOL_TO_EDITOR_COMMAND.get(legacy_name, "")
+    if not command:
+        # str_replace_editor: already in the new shape, just rename.
+        return arguments
+
+    out: Dict[str, Any] = {"command": command}
+    # path: ``path`` (most) or ``file`` (replace_in_file).
+    path = arguments.get("path") or arguments.get("file")
+    if path is not None:
+        out["path"] = path
+
+    if legacy_name == "file_write":
+        if "content" in arguments:
+            out["file_text"] = arguments["content"]
+    elif legacy_name == "replace_in_file":
+        old = arguments.get("old_str") or arguments.get("old_text")
+        new = arguments.get("new_str") or arguments.get("new_text")
+        if old is not None:
+            out["old_str"] = old
+        if new is not None:
+            out["new_str"] = new
+    # file_read / file_list / image_read / str_replace_editor view: nothing else.
+    return out
