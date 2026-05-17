@@ -7,7 +7,7 @@ import re
 import json
 import time
 import base64
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from openai import OpenAI
 from nanorollout.envs.uda_env.utils import get_logger, colorize
 from nanorollout.envs.uda_env.tools import (
@@ -69,6 +69,122 @@ MODEL_PRICING_REGISTRY = {
         "output_over_200k": 18.00,
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Cache-control helpers (ported from
+# anthropic-quickstarts/computer-use-best-practices/loop.py).
+#
+# Anthropic allows at most 4 cache_control breakpoints per request. ClaudeLLM
+# spends one on the system block (in _make_api_call) and up to 3 here on the
+# trailing user-content blocks. Stale breakpoints from prior turns are popped
+# first so the cache pattern actually rolls forward with new turns instead of
+# fragmenting.
+# ---------------------------------------------------------------------------
+_CACHEABLE_BLOCK_TYPES = frozenset({"tool_result", "text", "image"})
+
+
+def _set_trailing_cache_control(messages: list, max_breakpoints: int = 3) -> None:
+    """Mark up to ``max_breakpoints`` trailing cacheable blocks for Anthropic
+    ephemeral caching, after clearing any breakpoints left by previous turns.
+
+    Operates in place on the user-role content lists. Only blocks at the tail
+    of the message stream are eligible — that's where new context lands each
+    turn, and where caching a fresh prefix actually buys us something.
+
+    Safe on non-Claude shapes (it just won't find any cacheable blocks).
+    """
+    cacheable_blocks: list = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype not in _CACHEABLE_BLOCK_TYPES:
+                continue
+            # Clear any breakpoint from a previous call.
+            block.pop("cache_control", None)
+            cacheable_blocks.append(block)
+
+    for block in cacheable_blocks[-max_breakpoints:]:
+        block["cache_control"] = {"type": "ephemeral"}
+
+
+# ---------------------------------------------------------------------------
+# Retry / backoff (ported from
+# anthropic-quickstarts/computer-use-best-practices/loop.py:_call_with_retry).
+#
+# Recoverable vs unrecoverable distinction is taxonomy-driven (matches HTTP
+# status code semantics) rather than treating every exception as retryable,
+# which is what our prior ad-hoc retry did. Exponential backoff with jitter
+# avoids thundering-herd on shared rate-limit windows.
+# ---------------------------------------------------------------------------
+
+_UNRECOVERABLE_4XX_STATUSES = frozenset({400, 401, 403, 404, 422})
+
+
+def _is_recoverable_api_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is worth retrying.
+
+    Mirrors the best-practices taxonomy without depending on Anthropic's
+    SDK-specific exception classes (we have to handle OpenAI, Anthropic,
+    Google, and httpx errors uniformly):
+
+    * Hard 4xx client errors (400/401/403/404/422): not retryable.
+    * 429 (rate limit) and 5xx: retryable.
+    * Connection / timeout errors that lack a status code: retryable.
+    * "overloaded" / "timeout" / "connection" in the message: retryable.
+    * Anything else: default to retryable to preserve our prior generous
+      retry behaviour. Errors that fail repeatedly will still hit the
+      attempt cap.
+    """
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        if status_code in _UNRECOVERABLE_4XX_STATUSES:
+            return False
+        if 400 <= status_code < 500 and status_code != 429:
+            return False
+        return True
+    msg = str(exc).lower()
+    if any(token in msg for token in ("overloaded", "timeout", "connection", "rate limit")):
+        return True
+    return True
+
+
+def _call_with_retry(
+    fn,
+    *,
+    max_attempts: int = 5,
+    base_delay: float = 1.0,
+    cap_delay: float = 60.0,
+):
+    """Invoke ``fn()`` with exponential backoff + jitter for recoverable errors.
+
+    ``delay = min(cap_delay, base_delay * 2**attempt) + uniform(0, 1)``.
+    Non-recoverable errors raise immediately. After ``max_attempts``
+    exhausted retries the last exception is re-raised.
+    """
+    import random
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_recoverable_api_error(exc) or attempt + 1 >= max_attempts:
+                raise
+            delay = min(cap_delay, base_delay * (2 ** attempt)) + random.uniform(0, 1)
+            logger.info(
+                "API call failed (attempt %d/%d, retryable=%s): %s — sleeping %.1fs",
+                attempt + 1, max_attempts, True, exc, delay,
+            )
+            time.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("_call_with_retry exhausted without exception")
 
 
 class CostTracker:
@@ -883,6 +999,33 @@ class BaseLLM(Controller):
         self.model = llm_config.get("model", kwargs.get("model", ""))
         self.messages: List[Dict[str, Any]] = []
         self.last_think: str | None = None
+
+        # System prompt — set by start_task(); injected into the API request
+        # by each subclass's _make_api_call (OpenAI prepends a system message,
+        # Claude passes a `system=` param, Gemini passes system_instruction).
+        # Kept empty for the Qwen3-VL legacy path that bundles everything into
+        # a single user message.
+        self.system_prompt: str = ""
+
+        # Context-management knobs. Both default to "on" with values matching
+        # anthropic-quickstarts/computer-use-best-practices.
+        self.history_window: int = int(
+            llm_config.get("history_window", kwargs.get("history_window", 8))
+        )
+        self.image_prune_min: int = int(
+            llm_config.get("image_prune_min", kwargs.get("image_prune_min", 3))
+        )
+        self.image_prune_interval: int = int(
+            llm_config.get("image_prune_interval", kwargs.get("image_prune_interval", 8))
+        )
+        # API-error retry policy. Exponential backoff with jitter — see
+        # _call_with_retry. Best-practices defaults: 5 attempts, 1s base.
+        self.api_retry_max_attempts: int = int(
+            llm_config.get("api_retry_max_attempts", kwargs.get("api_retry_max_attempts", 5))
+        )
+        self.api_retry_base_delay: float = float(
+            llm_config.get("api_retry_base_delay", kwargs.get("api_retry_base_delay", 1.0))
+        )
         
         # Cost tracking
         self.total_cost: float = 0.0
@@ -1030,40 +1173,24 @@ class BaseLLM(Controller):
         # Prepare message content
         message_content = self._prepare_message_content(prompt, images_base64)
         self.messages.append({"role": "user", "content": message_content})
-        
-        attempt = 0
+
+        # Compact history + prune images BEFORE the API call so the request
+        # body reflects exactly what the model will see (and what counts
+        # against token budgets / prompt cache).
+        self._compact_history()
+
         max_attempts = self.max_parse_retries
-        
-        while attempt < max_attempts:
-            attempt += 1
-            logger.debug(f"Sending prompt to {self.model} (conversation depth: {len(self.messages)}, attempt {attempt}/{max_attempts})")
-            
-            try:
-                # Call provider-specific API
-                response = self._make_api_call()
-                
-                # Handle response (provider-specific)
-                parsed_response = self._handle_api_response(response, attempt, max_attempts)
-                
-                # Cleanup old images after successful call
-                self._cleanup_old_user_message_images()
-                
-                return parsed_response
-            except Exception as e:
-                logger.error(f"Error calling LLM API: {e}")
-                # Don't retry deterministic client errors (4xx except 429)
-                status_code = getattr(e, "status_code", None)
-                if status_code is not None and 400 <= status_code < 500 and status_code != 429:
-                    logger.error(f"Non-retryable client error (HTTP {status_code}), raising immediately")
-                    raise
-                if attempt >= max_attempts:
-                    raise
-                sleep_time = min(30 * attempt, 120)
-                logger.info(f"Retrying in {sleep_time}s (attempt {attempt}/{max_attempts})...")
-                time.sleep(sleep_time)
-                continue
-        
-        raise ValueError("Failed to obtain a valid action after retrying LLM response parsing.")
+
+        # API errors get exponential backoff via _call_with_retry (recoverable
+        # vs unrecoverable taxonomy from best-practices). Parse errors are
+        # already handled inside _handle_api_response with correction-prompt
+        # retries; they don't reach here unless every attempt failed.
+        response = _call_with_retry(
+            self._make_api_call,
+            max_attempts=self.api_retry_max_attempts,
+            base_delay=self.api_retry_base_delay,
+        )
+        return self._handle_api_response(response, 1, max_attempts)
     
     def _make_api_call(self) -> Any:
         """Make the actual API call. Must be implemented by subclasses.
@@ -1316,37 +1443,99 @@ class BaseLLM(Controller):
         return message
     
     def _cleanup_old_user_message_images(self) -> None:
-        """Remove images from old user messages, keeping only the most recent user message's images.
-        
-        This prevents image accumulation across iterations. Only the current iteration's images
-        should be included in the API call.
+        """Legacy: prune images from non-trailing user messages.
+
+        Replaced by :meth:`_compact_history`, which uses cache-friendly
+        ``StripImagesAtIntervals`` instead of "keep only the last image".
+        Kept as a no-op shim so subclass overrides that still call
+        ``self._cleanup_old_user_message_images()`` don't break.
         """
-        # Check if this provider supports images (subclasses can override)
-        if not (hasattr(self, 'is_qwen_vl_model') or hasattr(self, 'is_qwen_model')):
-            # For non-Qwen models, check if we should cleanup images
-            # This is a generic implementation that can be overridden
-            pass
-        
-        # Find the last user message (should be the one we just added)
-        last_user_msg_idx = None
-        for i in range(len(self.messages) - 1, -1, -1):
-            if self.messages[i].get("role") == "user":
-                last_user_msg_idx = i
-                break
-        
-        # Remove images from all user messages except the last one
-        if last_user_msg_idx is not None:
-            for i in range(len(self.messages)):
-                if i != last_user_msg_idx and self.messages[i].get("role") == "user":
-                    old_content = self.messages[i].get("content", "")
-                    if isinstance(old_content, list):
-                        # Check if it has images
-                        has_images = any(isinstance(item, dict) and item.get("type") == "image_url"
-                                        for item in old_content)
-                        if has_images:
-                            # Remove images, keep only text
-                            self.messages[i] = self._remove_images_from_message(self.messages[i])
-                            logger.debug(f"Removed images from old user message at index {i}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # High-level task lifecycle (preferred entry points for TaskExecutor)
+    # ------------------------------------------------------------------ #
+
+    def start_task(self, task_description: str) -> None:
+        """Initialise conversation state for a new task.
+
+        Sets the (stable, cacheable) system prompt and seeds ``self.messages``
+        with the first user message — just ``Task: <instruction>`` — so the
+        system prefix is shared across tasks and providers can prompt-cache it.
+
+        Qwen3-VL keeps the legacy single-user-message layout because it parses
+        tool calls out of the user-visible prompt rather than from API-level
+        tool-calling; only the non-Qwen3-VL path migrates to the system/user
+        split.
+        """
+        self.clear_history()
+        is_qwen_vl = bool(getattr(self, "is_qwen_vl_model", False))
+        if is_qwen_vl:
+            self.system_prompt = ""
+            from nanorollout.envs.uda_env.tools import format_tools_as_text  # local import to avoid cycles
+            tools_description = (
+                format_tools_as_text(self.tools) if (self.use_tools and self.tools) else ""
+            )
+            initial = UNIFIED_INITIAL_PROMPT_TEMPLATE_QWEN3VL.format(
+                instruction=task_description,
+                tools_description=tools_description,
+            )
+            self.messages.append({"role": "user", "content": initial})
+        else:
+            from .prompts import build_system_prompt
+            self.system_prompt = build_system_prompt(
+                self.client_type, model_name=self.model
+            )
+            self.messages.append(
+                {"role": "user", "content": f"Task: {task_description}"}
+            )
+
+    def step(self, feedback: str, images_base64: list | None = None) -> Dict[str, Any]:
+        """Append a feedback turn and request the next action from the LLM.
+
+        Feedback text is intentionally minimal — once ``system_prompt`` carries
+        the guidance, every iteration's user message can be just the raw tool
+        feedback (no template wrapping, no progress notes). For Qwen3-VL the
+        feedback template still wraps the text since that model relies on
+        prompt-embedded reminders.
+        """
+        is_qwen_vl = bool(getattr(self, "is_qwen_vl_model", False))
+        if is_qwen_vl:
+            user_text = UNIFIED_FEEDBACK_PROMPT_TEMPLATE_QWEN3VL.format(feedback=feedback)
+        else:
+            user_text = feedback
+        return self.call(user_text, images_base64=images_base64)
+
+    # ------------------------------------------------------------------ #
+    # History compaction — applied before each API call.
+    # ------------------------------------------------------------------ #
+
+    def _compact_history(self) -> None:
+        """Apply sliding-window + cache-friendly image pruning in place.
+
+        Replaces ``self.messages`` with a trimmed list (keeping system-prompt
+        prefix, the original task message, and the last ``history_window``
+        iteration blocks) and replaces all-but-the-most-recent-N screenshots
+        with the ``[Image Omitted]`` placeholder. The image pruner
+        (:class:`StripImagesAtIntervals`) is structured so that the kept-image
+        set only changes once every ``image_prune_interval`` turns, which
+        keeps the request prefix stable for Anthropic prompt caching.
+
+        Safe to call before every ``_make_api_call``: short conversations
+        short-circuit out of both transforms.
+        """
+        if self.history_window <= 0 and self.image_prune_min < 0:
+            return
+        from .history import SlidingWindowCompactor, StripImagesAtIntervals
+
+        if self.history_window > 0:
+            self.messages = SlidingWindowCompactor(window=self.history_window)(
+                self.messages
+            )
+        StripImagesAtIntervals(
+            min_images=self.image_prune_min,
+            interval=self.image_prune_interval,
+        )(self.messages)
 
 
 class OpenAILLM(BaseLLM):
@@ -1597,13 +1786,21 @@ class OpenAILLM(BaseLLM):
                 "input": input_items,
                 "reasoning": {"effort": "high"},
             }
+            if self.system_prompt:
+                api_params["instructions"] = self.system_prompt
             if self.use_tools and self.tools:
                 api_params["tools"] = self._convert_tools_to_responses_api(self.tools)
             return self.client.responses.create(**api_params)
         else:
+            # Prepend a system message if one is set; never mutate self.messages
+            # (compaction already owns that, and the system block isn't part of
+            # the iteration window — it lives entirely in the API request).
+            outgoing = self.messages
+            if self.system_prompt:
+                outgoing = [{"role": "system", "content": self.system_prompt}, *self.messages]
             api_params = {
                 "model": self.model,
-                "messages": self.messages,
+                "messages": outgoing,
             }
             if self.use_tools and self.tools:
                 api_params["tools"] = self.tools
@@ -2037,20 +2234,26 @@ class QwenLLM(OpenAILLM):
 
     def _make_api_call(self) -> Any:
         """Make OpenAI API call, but exclude tools for Qwen3-VL (text-based tool calling)."""
-        # Prepare API call parameters
+        # Prepend the system prompt for non-VL Qwen flows; VL keeps the
+        # legacy single-user-message layout where start_task() leaves
+        # system_prompt empty by design.
+        outgoing = self.messages
+        if self.system_prompt and not self.is_qwen_vl_model:
+            outgoing = [{"role": "system", "content": self.system_prompt}, *self.messages]
+
         api_params = {
             "model": self.model,
-            "messages": self.messages,
-            "extra_body": {"reasoning": {"enabled": True}}
+            "messages": outgoing,
+            "extra_body": {"reasoning": {"enabled": True}},
         }
 
         if self.temperature is not None:
             api_params["temperature"] = self.temperature
-        
+
         # Add tools if in tool calling mode (except for Qwen3-VL text-based tool calls)
         if self.use_tools and self.tools and not self.is_qwen_vl_model:
             api_params["tools"] = self.tools
-        
+
         return self.client.chat.completions.create(**api_params)
 
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
@@ -2430,14 +2633,47 @@ class ClaudeLLM(BaseLLM):
         else:
             return prompt
 
+    def _compact_history(self) -> None:
+        """Claude extension to the base compaction pass.
+
+        Runs the universal sliding-window + image-pruning, then sets
+        trailing cache-control breakpoints. Co-locating this with the
+        rest of the message-rewriting transforms matches the ordering in
+        ``anthropic-quickstarts/computer-use-best-practices/loop.py``:
+
+            _truncate_to_last_compaction → prune → _set_trailing_cache_control
+        """
+        super()._compact_history()
+        _set_trailing_cache_control(self.messages, max_breakpoints=3)
+
     def _make_api_call(self) -> Any:
-        """Make Claude API call."""
-        api_params = {
+        """Make Claude API call.
+
+        Cache-control breakpoint strategy (ported from
+        ``anthropic-quickstarts/computer-use-best-practices/loop.py``):
+
+        * One breakpoint on the system block (set here, fresh each call).
+        * Up to three rolling breakpoints on trailing user-role content
+          blocks (tool_result / image / text). Anthropic caps us at four
+          total; spending the first on system and the rest near the tail
+          means new turns extend a cached prefix instead of invalidating
+          it. Those three are set inside :meth:`_compact_history`.
+        """
+        system: list[Dict[str, Any]] | None = None
+        if self.system_prompt:
+            system = [{
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }]
+
+        api_params: Dict[str, Any] = {
             "model": self.model,
             "messages": self.messages,
             "max_tokens": 16000,
-            "cache_control": {"type": "ephemeral"},
         }
+        if system is not None:
+            api_params["system"] = system
 
         if self.use_tools and self.tools:
             api_params["tools"] = self._convert_openai_tools_to_claude(self.tools)
@@ -2890,15 +3126,20 @@ class GeminiLLM(BaseLLM):
         """Make Gemini API call."""
         # Convert messages to Gemini contents format
         contents = self._convert_openai_messages_to_gemini_contents(self.messages)
-        
+
         # Prepare API call parameters
         api_params = {
             "model": self.model,
             "contents": contents
         }
-        
+
         # Build GenerateContentConfig
         config_kwargs = {}
+
+        # System prompt — Gemini carries it on the config, not as a "system"
+        # role message inside ``contents``.
+        if self.system_prompt:
+            config_kwargs["system_instruction"] = self.system_prompt
 
         # Add tools if in tool calling mode
         if self.use_tools and self.tools:

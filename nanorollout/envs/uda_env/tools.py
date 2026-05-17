@@ -42,297 +42,147 @@ _COMPUTER_USE_DESCRIPTION = (
 )
 
 
+# Canonical action set ported from
+# anthropic-quickstarts/computer-use-best-practices/computer_use/tools/computer.py.
+# Same 17 Anthropic Action_20251124 actions + read_clipboard / write_clipboard.
+_COMPUTER_USE_ACTION_LIST: List[str] = [
+    "screenshot",
+    "left_click",
+    "double_click",
+    "triple_click",
+    "right_click",
+    "middle_click",
+    "mouse_move",
+    "left_click_drag",
+    "scroll",
+    "type",
+    "key",
+    "hold_key",
+    "left_mouse_down",
+    "left_mouse_up",
+    "cursor_position",
+    "read_clipboard",
+    "write_clipboard",
+    "wait",
+    "zoom",
+]
+
+
+_COMPUTER_USE_ACTION_DESCRIPTION = (
+    "* screenshot: capture the screen.\n"
+    "* left_click / double_click / triple_click / right_click / middle_click: "
+    "click at `coordinate`; optional `text` holds modifier keys "
+    "(e.g. 'ctrl', 'shift') during the click.\n"
+    "* mouse_move: move cursor to `coordinate`.\n"
+    "* left_click_drag: drag from `start_coordinate` to `coordinate`.\n"
+    "* scroll: scroll at `coordinate` in `scroll_direction` by `scroll_amount` notches; "
+    "optional `text` holds modifier keys (e.g. 'ctrl' for zoom).\n"
+    "* type: type literal `text` at the current focus.\n"
+    "* key: press a chord like 'ctrl+shift+t' or a single key (xdotool keysym).\n"
+    "* hold_key: hold the chord in `text` for `duration` seconds.\n"
+    "* left_mouse_down / left_mouse_up: press or release the left button at "
+    "`coordinate` (for manual drags or long-press).\n"
+    "* cursor_position: return the current cursor x,y.\n"
+    "* read_clipboard / write_clipboard: get/set clipboard `text`.\n"
+    "* wait: sleep `duration` seconds.\n"
+    "* zoom: return a cropped, higher-detail view of the screen region "
+    "`region` = [x1, y1, x2, y2]. Use this to read small text or inspect fine "
+    "detail. Coordinates in subsequent actions still refer to the full "
+    "screenshot, not the zoom."
+)
+
+
+# Single-source input schema for the unified ``computer_use`` tool.
+# Mirrors the JSON Schema in
+# anthropic-quickstarts/computer-use-best-practices/computer_use/tools/computer.py.
+_COMPUTER_USE_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(_COMPUTER_USE_ACTION_LIST),
+            "description": _COMPUTER_USE_ACTION_DESCRIPTION,
+        },
+        "coordinate": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
+        },
+        "start_coordinate": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
+        },
+        "text": {"type": "string"},
+        "scroll_direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right"],
+        },
+        "scroll_amount": {"type": "integer", "minimum": 1},
+        "duration": {"type": "number", "minimum": 0, "maximum": 60},
+        "region": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[x1, y1, x2, y2] in the same image space as `coordinate`.",
+        },
+    },
+    "required": ["action"],
+}
+
+
 def get_computer_use_tools() -> List[Dict[str, Any]]:
     """Get OpenAI tool definitions for the computer-use action set.
 
     Returns:
-        List of 17 tools, one per Anthropic Computer Tool action, plus
-        the shared ``task_complete`` sentinel.
+        A list of three tools:
+
+        * ``computer_use`` — single tool with an ``action`` enum (19 actions)
+          mirroring ``anthropic-quickstarts/computer-use-best-practices``
+          (the canonical Anthropic Action_20251124 set + ``read_clipboard``
+          / ``write_clipboard``). Drives uda-desktop's ``/v1/computer-use/*``.
+        * ``computer_batch`` — execute multiple ``computer_use`` actions
+          sequentially in one model turn. Stops on the first error.
+          Coordinates inside a batch refer to the screenshot taken *before*
+          the batch call.
+        * ``task_complete`` — terminator sentinel; verifier hooks in via
+          its ``result`` payload.
     """
-    tools: List[Dict[str, Any]] = [
+    return [
         {
             "type": "function",
             "function": {
-                "name": "computer_use_screenshot",
-                "description": f"{_COMPUTER_USE_DESCRIPTION} Capture the current screen as a base64-encoded PNG.",
-                "parameters": {"type": "object", "properties": {}, "required": []},
+                "name": "computer_use",
+                "description": _COMPUTER_USE_DESCRIPTION,
+                "parameters": _COMPUTER_USE_INPUT_SCHEMA,
             },
         },
         {
             "type": "function",
             "function": {
-                "name": "computer_use_cursor_position",
-                "description": "Return the current mouse cursor (x, y) in the X11 root window.",
-                "parameters": {"type": "object", "properties": {}, "required": []},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_mouse_move",
-                "description": "Move the mouse pointer to the given (x, y) without clicking.",
+                "name": "computer_batch",
+                "description": (
+                    "Execute multiple `computer_use` actions sequentially in a "
+                    "single turn. Stops on the first error. Each item is the "
+                    "same shape as a single `computer_use` call. All "
+                    "coordinates refer to the screenshot taken *before* this "
+                    "batch. Include a `screenshot` action at the end whenever "
+                    "the preceding actions are likely to change visible state "
+                    "you need to verify."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "coordinate": {
+                        "actions": {
                             "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Target pixel coordinate [x, y]; (0, 0) is the top-left of the root window.",
+                            "minItems": 1,
+                            "items": _COMPUTER_USE_INPUT_SCHEMA,
                         }
                     },
-                    "required": ["coordinate"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_left_click",
-                "description": "Left-click. Optionally move to `coordinate` first; optionally hold a modifier `key` (e.g. 'ctrl', 'shift').",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before clicking.",
-                        },
-                        "key": {
-                            "type": "string",
-                            "description": "Optional modifier to hold during the click (xdotool keysym, e.g. 'ctrl', 'shift', 'alt').",
-                        },
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_right_click",
-                "description": "Right-click. Same parameters as `computer_use_left_click`.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before clicking.",
-                        },
-                        "key": {"type": "string", "description": "Optional modifier keysym."},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_middle_click",
-                "description": "Middle-click. Same parameters as `computer_use_left_click`.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before clicking.",
-                        },
-                        "key": {"type": "string", "description": "Optional modifier keysym."},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_double_click",
-                "description": "Double-click. Same parameters as `computer_use_left_click`.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before clicking.",
-                        },
-                        "key": {"type": "string", "description": "Optional modifier keysym."},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_triple_click",
-                "description": "Triple-click (selects a paragraph/line in most editors). Same parameters as `computer_use_left_click`.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before clicking.",
-                        },
-                        "key": {"type": "string", "description": "Optional modifier keysym."},
-                    },
-                    "required": [],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_left_click_drag",
-                "description": "Press the left mouse button at `start_coordinate`, drag to `coordinate`, then release. Use for selecting text / dragging windows / drawing.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "start_coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Drag start pixel coordinate [x, y].",
-                        },
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Drag end pixel coordinate [x, y].",
-                        },
-                    },
-                    "required": ["start_coordinate", "coordinate"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_left_mouse_down",
-                "description": "Press and hold the left mouse button (no release). Use only when chaining manual drags.",
-                "parameters": {"type": "object", "properties": {}, "required": []},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_left_mouse_up",
-                "description": "Release the left mouse button.",
-                "parameters": {"type": "object", "properties": {}, "required": []},
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_key",
-                "description": "Press a single key or chord. `text` is an xdotool keysym (e.g. 'Return', 'Tab', 'ctrl+c', 'super+l').",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {
-                            "type": "string",
-                            "description": "xdotool keysym, e.g. 'Return', 'Escape', 'ctrl+c'.",
-                        }
-                    },
-                    "required": ["text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_type",
-                "description": "Type the given UTF-8 string into the currently focused window (xdotool type).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string", "description": "Text to type."}
-                    },
-                    "required": ["text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_hold_key",
-                "description": "Press a key, sleep `duration` seconds, then release. Useful for sticky modifiers or game-style holds.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string", "description": "xdotool keysym to hold."},
-                        "duration": {
-                            "type": "number",
-                            "description": "Seconds to hold the key (0–100).",
-                        },
-                    },
-                    "required": ["text", "duration"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_scroll",
-                "description": "Scroll in `scroll_direction` by `scroll_amount` ticks. Optionally move to `coordinate` first; optionally hold modifier `text` during the scroll.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "scroll_direction": {
-                            "type": "string",
-                            "enum": ["up", "down", "left", "right"],
-                            "description": "Scroll direction.",
-                        },
-                        "scroll_amount": {
-                            "type": "integer",
-                            "description": "Number of scroll-wheel ticks (>= 0).",
-                        },
-                        "coordinate": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Optional pixel coordinate to move to before scrolling.",
-                        },
-                        "text": {
-                            "type": "string",
-                            "description": "Optional modifier keysym to hold during the scroll (e.g. 'ctrl' for zoom).",
-                        },
-                    },
-                    "required": ["scroll_direction", "scroll_amount"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_wait",
-                "description": "Sleep `duration` seconds, then take a screenshot. Use for UI animations / dialogs settling.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "duration": {
-                            "type": "number",
-                            "description": "Seconds to wait before taking the post-screenshot.",
-                        }
-                    },
-                    "required": ["duration"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "computer_use_zoom",
-                "description": "Take a screenshot of a sub-region of the screen (returns the crop in base64_image).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "region": {
-                            "type": "array",
-                            "items": {"type": "integer"},
-                            "description": "Crop rect [x0, y0, x1, y1]; must have x1>x0 and y1>y0.",
-                        }
-                    },
-                    "required": ["region"],
+                    "required": ["actions"],
                 },
             },
         },
@@ -340,20 +190,28 @@ def get_computer_use_tools() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "task_complete",
-                "description": "Mark the task as complete and exit. Optionally provide the final result/answer if the task requires returning a specific output (e.g., JSON answer). For tasks that generate files in the sandbox, you can omit the result parameter.",
+                "description": (
+                    "Mark the task as complete and exit. Optionally provide "
+                    "the final result/answer if the task requires returning a "
+                    "specific output (e.g., a JSON string). For tasks that "
+                    "generate files in the sandbox, omit the `result` parameter."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "result": {
                             "type": "string",
-                            "description": "Optional: The final result or answer for the task (e.g., JSON string). Use this when the task requires returning a specific output. For tasks that generate files, omit this parameter.",
+                            "description": (
+                                "Optional: the final result for the task. Use "
+                                "when the task requires returning a specific "
+                                "output. Omit when the task writes files."
+                            ),
                         }
                     },
                 },
             },
         },
     ]
-    return tools
 
 
 def get_file_tools() -> List[Dict[str, Any]]:
@@ -694,66 +552,122 @@ def get_unified_tools() -> List[Dict[str, Any]]:
     return all_tools
 
 
-# Valid parameter sets per tool (catches param typos / unsupported args early).
-# Computer-use entries mirror server.py's ActionRequest pydantic schema.
+# Valid parameter sets per computer-use action.
+# Keyed by the synthesized ``action_type`` (``"computer_use_<action>"``) that
+# :func:`map_tool_call_to_action` produces, NOT by tool name (the tool itself
+# is the single ``computer_use``). Used by sandbox-side validation to catch
+# obviously wrong payloads before they hit ``/v1/computer-use/action``.
 _COMPUTER_USE_VALID_PARAMS: Dict[str, set] = {
     "computer_use_screenshot": set(),
     "computer_use_cursor_position": set(),
     "computer_use_mouse_move": {"coordinate"},
-    "computer_use_left_click": {"coordinate", "key"},
-    "computer_use_right_click": {"coordinate", "key"},
-    "computer_use_middle_click": {"coordinate", "key"},
-    "computer_use_double_click": {"coordinate", "key"},
-    "computer_use_triple_click": {"coordinate", "key"},
-    "computer_use_left_click_drag": {"start_coordinate", "coordinate"},
-    "computer_use_left_mouse_down": set(),
-    "computer_use_left_mouse_up": set(),
+    "computer_use_left_click": {"coordinate", "text"},
+    "computer_use_right_click": {"coordinate", "text"},
+    "computer_use_middle_click": {"coordinate", "text"},
+    "computer_use_double_click": {"coordinate", "text"},
+    "computer_use_triple_click": {"coordinate", "text"},
+    "computer_use_left_click_drag": {"start_coordinate", "coordinate", "duration"},
+    "computer_use_left_mouse_down": {"coordinate"},
+    "computer_use_left_mouse_up": {"coordinate"},
     "computer_use_key": {"text"},
     "computer_use_type": {"text"},
     "computer_use_hold_key": {"text", "duration"},
     "computer_use_scroll": {"scroll_direction", "scroll_amount", "coordinate", "text"},
     "computer_use_wait": {"duration"},
     "computer_use_zoom": {"region"},
+    "computer_use_read_clipboard": set(),
+    "computer_use_write_clipboard": {"text"},
 }
+
+_OTHER_TOOL_VALID_PARAMS: Dict[str, set] = {
+    "file_read": {"path"},
+    "file_write": {"path", "content"},
+    "file_list": {"path"},
+    "replace_in_file": {"file", "old_text", "new_text"},
+    "search_in_file": {"file", "pattern"},
+    "find_files": {"path", "glob"},
+    "image_read": {"path"},
+    "str_replace_editor": {"command", "path", "file_text", "old_str", "new_str", "insert_line", "view_range"},
+    "code_execute": {"code", "language", "timeout"},
+    "shell_execute": {"command"},
+    "task_complete": {"result"},
+}
+
+
+def _validate_computer_use_args(action: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop unknown params for a given ``action``; raise on unknown actions."""
+    action_type = f"computer_use_{action}"
+    if action_type not in _COMPUTER_USE_VALID_PARAMS:
+        raise ValueError(
+            f"Unknown computer_use action: {action!r}. "
+            f"Valid actions: {sorted(a for a in _COMPUTER_USE_VALID_PARAMS)}."
+        )
+    valid_params = _COMPUTER_USE_VALID_PARAMS[action_type]
+    cleaned = {k: v for k, v in arguments.items() if k in valid_params}
+    return cleaned
 
 
 def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Map an LLM tool call to a sandbox action.
 
-    The action's ``action_type`` is the tool name verbatim — dispatch in
-    :class:`UnifiedSandboxClient` recognises ``computer_use_*`` /
-    ``file_*`` / ``code_*`` / ``shell_*`` prefixes and routes accordingly.
+    Dispatching rules:
 
-    Args:
-        tool_name: Name of the tool being called (e.g. ``computer_use_left_click``).
-        arguments: Tool arguments as emitted by the LLM.
+    * ``computer_use`` — unified tool with an ``action`` enum (19 actions).
+      Returns ``{"action_type": "computer_use_<action>", ...other_args}`` so
+      downstream dispatch in :class:`ComputerUseSandboxClient` /
+      :class:`OSWorldV1Adapter` (which both strip the ``computer_use_``
+      prefix) keeps working unchanged.
 
-    Returns:
-        Action dictionary for the sandbox client.
+    * ``computer_batch`` — wraps a list of sub-actions. Returns
+      ``{"actions": [...]}`` which :class:`TaskExecutor.run_task` already
+      handles as a multi-action turn.
 
-    Raises:
-        ValueError: If ``tool_name`` is unknown or ``arguments`` contains
-            keys not in the tool's whitelisted parameter set.
+    * Legacy ``computer_use_<action>`` names are still accepted (no-op
+      remap to the new shape) so fine-tuned models trained on the old
+      schema don't break.
+
+    * Any other tool (file_*, code_execute, shell_execute, task_complete,
+      str_replace_editor, …) is whitelisted in ``_OTHER_TOOL_VALID_PARAMS``;
+      its arguments are filtered to that whitelist and ``action_type`` is
+      set to the tool name verbatim.
+
+    Raises ``ValueError`` for unknown tools / unknown actions / unsupported
+    arguments.
     """
-    tool_valid_params: Dict[str, set] = {
-        **_COMPUTER_USE_VALID_PARAMS,
-        "file_read": {"path"},
-        "file_write": {"path", "content"},
-        "file_list": {"path"},
-        "replace_in_file": {"file", "old_text", "new_text"},
-        "search_in_file": {"file", "pattern"},
-        "find_files": {"path", "glob"},
-        "image_read": {"path"},
-        "str_replace_editor": {"command", "path", "file_text", "old_str", "new_str", "insert_line", "view_range"},
-        "code_execute": {"code", "language", "timeout"},
-        "shell_execute": {"command"},
-        "task_complete": {"result"},
-    }
+    # --- computer_batch: expand to multi-action shape ------------------- #
+    if tool_name == "computer_batch":
+        raw_actions = arguments.get("actions")
+        if not isinstance(raw_actions, list) or not raw_actions:
+            raise ValueError(
+                "computer_batch requires a non-empty 'actions' array; "
+                f"got {raw_actions!r}"
+            )
+        sub_actions: List[Dict[str, Any]] = []
+        for i, sub in enumerate(raw_actions):
+            if not isinstance(sub, dict):
+                raise ValueError(f"computer_batch.actions[{i}] must be an object")
+            sub_actions.append(map_tool_call_to_action("computer_use", sub))
+        return {"action_type": "computer_batch", "actions": sub_actions}
 
-    if tool_name not in tool_valid_params:
+    # --- computer_use (single action) ----------------------------------- #
+    if tool_name == "computer_use":
+        action_name = arguments.get("action")
+        if not isinstance(action_name, str) or not action_name:
+            raise ValueError("computer_use requires an 'action' field")
+        rest = {k: v for k, v in arguments.items() if k != "action"}
+        cleaned = _validate_computer_use_args(action_name, rest)
+        return {"action_type": f"computer_use_{action_name}", **cleaned}
+
+    # --- Legacy computer_use_<action> tool names ------------------------ #
+    if tool_name.startswith("computer_use_") and tool_name in _COMPUTER_USE_VALID_PARAMS:
+        action_name = tool_name[len("computer_use_"):]
+        cleaned = _validate_computer_use_args(action_name, arguments)
+        return {"action_type": tool_name, **cleaned}
+
+    # --- Everything else (file_*, code, shell, task_complete, editor) -- #
+    if tool_name not in _OTHER_TOOL_VALID_PARAMS:
         raise ValueError(f"Unknown tool: {tool_name}")
-
-    valid_params = tool_valid_params[tool_name]
+    valid_params = _OTHER_TOOL_VALID_PARAMS[tool_name]
     invalid_params = set(arguments.keys()) - valid_params
     if invalid_params:
         raise ValueError(
@@ -761,8 +675,5 @@ def map_tool_call_to_action(tool_name: str, arguments: Dict[str, Any]) -> Dict[s
             f"Valid parameters are: {valid_params}. "
             f"Received: {list(arguments.keys())}"
         )
-    arguments = {k: v for k, v in arguments.items() if k in valid_params}
-
-    action: Dict[str, Any] = {"action_type": tool_name}
-    action.update(arguments)
-    return action
+    cleaned = {k: v for k, v in arguments.items() if k in valid_params}
+    return {"action_type": tool_name, **cleaned}

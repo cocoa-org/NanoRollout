@@ -427,6 +427,12 @@ class ComputerUseSandboxClient(SandboxClient):
         "scroll",
         "wait",
         "zoom",
+        # 2 client-side extensions ported from anthropic-quickstarts/
+        # computer-use-best-practices. uda-desktop's `/v1/computer-use/action`
+        # may or may not implement these natively; ``get_feedback`` falls back
+        # to xclip via /v1/shell when the server rejects them.
+        "read_clipboard",
+        "write_clipboard",
     })
 
     # Allowed payload keys per Anthropic ActionRequest schema (server.py).

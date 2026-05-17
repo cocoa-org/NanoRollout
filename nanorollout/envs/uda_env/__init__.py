@@ -19,7 +19,7 @@ inline edits rather than as cross-package re-exports.
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .adapter import ADAPTER_ROOT
 from .logger import setup_logging, get_logger
@@ -57,6 +57,8 @@ _COMPUTER_USE_ACTIONS = frozenset({
     "left_click", "right_click", "middle_click", "double_click", "triple_click",
     "left_click_drag", "left_mouse_down", "left_mouse_up",
     "key", "type", "hold_key", "scroll", "wait", "zoom",
+    # Best-practices alignment: clipboard read/write are also computer_use_*.
+    "read_clipboard", "write_clipboard",
 })
 
 
@@ -290,16 +292,15 @@ class TaskExecutor:
 
         logger.debug(f"Task description: {colorize(task_desc, 'YELLOW')}")
 
-        def add_progress_note(base_message: str, current_iteration: int) -> str:
-            """Append iteration progress context to controller prompts."""
-            remaining = max(max_iterations - current_iteration, 0)
-            note = (
-                f"\n\n[Progress update: iteration {current_iteration}/{max_iterations}. "
-                f"Remaining iterations: {remaining}.]"
-            )
-            if remaining <= 2:
-                note += " You are near the maximum iteration budget. Prioritize finishing steps and produce the final boxed answer soon."
-            return f"{base_message}{note}"
+        # Configurable: whether to auto-screenshot after every GUI-affecting
+        # action. Anthropic's best-practices reference doesn't do this — the
+        # model takes screenshots when it needs them, and tools that
+        # genuinely mutate state attach their own screenshot in the result.
+        # Set ``sandbox.screenshot_after_action`` to True to restore the old
+        # belt-and-suspenders behaviour.
+        screenshot_after_action = bool(
+            self.config.get("sandbox", {}).get("screenshot_after_action", False)
+        )
 
         # Store task description for initial prompt only
         self.task_description = task_desc
@@ -334,11 +335,17 @@ class TaskExecutor:
                 key: value for key, value in iteration_timing.items() if key != "_finalized"
             })
 
-        # Build initial prompt (only for first iteration)
-        prompt = self.controller.build_prompt(task_description=task_desc)
+        # Seed the controller with system prompt + first user message.
+        # After this, all per-iteration LLM calls go through controller.step()
+        # — the executor no longer holds or rebuilds prompts.
+        self.controller.start_task(task_desc)
 
         action = None
         final_iteration = 0
+        # First call uses the seeded user message; thereafter we pass feedback.
+        # ``pending_feedback is None`` is the signal to call without appending
+        # another user message.
+        pending_feedback: Optional[str] = None
         last_feedback_with_image = None
         images_from_last_iteration = []  # Store images from the previous iteration only
         task_result = None  # Store task result if provided in task_complete
@@ -373,8 +380,7 @@ class TaskExecutor:
             images_base64 = images_from_last_iteration.copy() if images_from_last_iteration else None
             if images_base64:
                 logger.debug(f"Including {len(images_base64)} image(s) from previous iteration in next prompt")
-            
-            prompt_with_progress = add_progress_note(prompt, iteration)
+
             iteration_timing = {
                 "iteration": iteration,
                 "llm_call_s": 0.0,
@@ -386,10 +392,26 @@ class TaskExecutor:
                 "completed": False,
                 "error_action": False,
             }
-            # Pass list of images (only from previous iteration)
+            # First iteration replays the seeded "Task: ..." user message via
+            # controller.call("", images=None); subsequent iterations push the
+            # tool feedback as the next user turn through controller.step().
             llm_started_at = time.perf_counter()
             try:
-                action = self.controller.call(prompt_with_progress, images_base64=images_base64)
+                if pending_feedback is None:
+                    # Re-enter the just-seeded conversation without appending
+                    # another user message. We use call("") which appends an
+                    # empty user message — but that's wasteful; instead,
+                    # invoke the underlying API directly via _make_api_call +
+                    # _handle_api_response, mirroring what call() does.
+                    self.controller._compact_history()
+                    response = self.controller._make_api_call()
+                    action = self.controller._handle_api_response(
+                        response, 1, self.controller.max_parse_retries
+                    )
+                else:
+                    action = self.controller.step(
+                        pending_feedback, images_base64=images_base64
+                    )
             except Exception:
                 llm_elapsed_s = time.perf_counter() - llm_started_at
                 iteration_timing["llm_call_s"] = llm_elapsed_s
@@ -426,10 +448,8 @@ class TaskExecutor:
                     "done": False,
                     "message": f"Error: {error_message}\nPlease correct the tool call parameters and try again."
                 }
-                # Prepare next prompt with error feedback
-                prompt = self.controller.build_prompt(
-                    feedback=feedback.get("message", "Continue with the task.")
-                )
+                # Queue error feedback as the next user turn.
+                pending_feedback = feedback.get("message", "Continue with the task.")
                 iteration_timing["error_action"] = True
                 finalize_iteration_timing(iteration_timing, iteration_started_at)
                 continue
@@ -469,7 +489,11 @@ class TaskExecutor:
                     
                     # For computer-use actions, take a screenshot after execution (unless it's already a screenshot action)
                     screenshot_base64 = None
-                    if is_computer_use_action(single_action) and single_action.get("action_type") != "computer_use_screenshot":
+                    if (
+                        screenshot_after_action
+                        and is_computer_use_action(single_action)
+                        and single_action.get("action_type") != "computer_use_screenshot"
+                    ):
                         if hasattr(self.sandbox_client, 'take_screenshot'):
                             try:
                                 screenshot_started_at = time.perf_counter()
@@ -481,7 +505,7 @@ class TaskExecutor:
                                     computer_use_screenshots.append(screenshot_base64)
                             except Exception as e:
                                 logger.warning(f"Failed to take screenshot after computer-use action: {e}")
-                    
+
                     # Check if this action was a screenshot or image_read and has image_base64
                     if single_action.get("action_type") == "computer_use_screenshot" and "image_base64" in single_feedback:
                         image_base64 = single_feedback["image_base64"]
@@ -552,9 +576,14 @@ class TaskExecutor:
                 iteration_timing["action_count"] = 1
                 record_tool_feedback(action, feedback)
                 
-                # For computer-use actions, take a screenshot after execution (unless it's already a screenshot action)
+                # For computer-use actions, take a screenshot after execution
+                # (unless it's already a screenshot action) — opt-in.
                 screenshot_base64 = None
-                if is_computer_use_action(action) and action.get("action_type") != "computer_use_screenshot":
+                if (
+                    screenshot_after_action
+                    and is_computer_use_action(action)
+                    and action.get("action_type") != "computer_use_screenshot"
+                ):
                     if hasattr(self.sandbox_client, 'take_screenshot'):
                         try:
                             screenshot_started_at = time.perf_counter()
@@ -597,11 +626,22 @@ class TaskExecutor:
                 finalize_iteration_timing(iteration_timing, iteration_started_at)
                 break
 
-            # Prepare next prompt - only feedback, context is maintained in self.messages
-            prompt = self.controller.build_prompt(
-                feedback=feedback.get("message", "Continue with the task.")
-            )
+            # Queue this iteration's tool feedback as the next user turn.
+            pending_feedback = feedback.get("message", "Continue with the task.")
             finalize_iteration_timing(iteration_timing, iteration_started_at)
+
+        # If the loop exits with messages ending on a user-role turn (max
+        # iterations reached on a tool-calling turn, an interrupted parse,
+        # or the model produced no actionable output), insert a synthetic
+        # assistant turn so the conversation stays API-valid for downstream
+        # consumers (logging, replay, follow-up requests).
+        # Ported from anthropic-quickstarts/computer-use-best-practices/loop.py.
+        controller_messages = getattr(self.controller, "messages", None)
+        if controller_messages and controller_messages[-1].get("role") == "user":
+            controller_messages.append({
+                "role": "assistant",
+                "content": "[stopped before completing]",
+            })
 
         result_dict = task | extract_config_info(self.config) | {
             "status": "success",
