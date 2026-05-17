@@ -22,6 +22,7 @@ from nanorollout.adapters.cocoa.adapter import CocoaTaskAdapter
 from nanorollout.adapters.osworld.adapter import OSWorldTaskAdapter
 from nanorollout.adapters.swe.task.datasets import (
     R2EGymDatasetAdapter,
+    SWE_REBENCH_REVISION,
     SweBenchProDatasetAdapter,
     SweRebenchDatasetAdapter,
     SweSmithDatasetAdapter,
@@ -537,7 +538,9 @@ def test_run_task_writes_fallback_when_adapter_write_fails(tmp_path: Path) -> No
 def test_swe_dataset_variants_are_explicit() -> None:
     assert isinstance(resolve_swe_dataset_adapter("r2e-gym"), R2EGymDatasetAdapter)
     assert isinstance(resolve_swe_dataset_adapter("pro"), SweBenchProDatasetAdapter)
-    assert isinstance(resolve_swe_dataset_adapter("rebench"), SweRebenchDatasetAdapter)
+    rebench_adapter = resolve_swe_dataset_adapter("rebench")
+    assert isinstance(rebench_adapter, SweRebenchDatasetAdapter)
+    assert rebench_adapter.dataset_revision == SWE_REBENCH_REVISION
     assert isinstance(resolve_swe_dataset_adapter("smith-py"), SweSmithDatasetAdapter)
 
 

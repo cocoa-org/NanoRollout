@@ -42,6 +42,8 @@ DATASET_MAPPING = {
     "r2e-gym": "R2E-Gym/R2E-Gym-V1",
 }
 
+SWE_REBENCH_REVISION = "89cdfbab4ab1bd8f5a658bb212d1b63624f4f881"
+
 
 def _select_instance(
     instances: list[dict[str, Any]],
@@ -55,6 +57,7 @@ def _select_instance(
 
 class SweDatasetAdapter:
     dataset_name: Optional[str] = None
+    dataset_revision: Optional[str] = None
     namespace = "swebench"
     image_dataset = "sweb"
     image_split = "eval"
@@ -71,10 +74,18 @@ class SweDatasetAdapter:
         return row
 
     def load_instances(self, split: str) -> list[dict[str, Any]]:
-        logger.info("Loading dataset %s split %s", self.source_name, split)
+        logger.info(
+            "Loading dataset %s split %s revision %s",
+            self.source_name,
+            split,
+            self.dataset_revision or "default",
+        )
+        load_kwargs: dict[str, Any] = {}
+        if self.dataset_revision:
+            load_kwargs["revision"] = self.dataset_revision
         return [
             self.normalize_row(dict(row))
-            for row in load_dataset(self.source_name, split=split)
+            for row in load_dataset(self.source_name, split=split, **load_kwargs)
         ]
 
     def resolve_instance(self, instance_id: str, split: str) -> dict[str, Any]:
@@ -141,6 +152,7 @@ class SweGymDatasetAdapter(SweDatasetAdapter):
 
 
 class SweRebenchDatasetAdapter(SweDatasetAdapter):
+    dataset_revision = SWE_REBENCH_REVISION
     namespace = "swerebench"
 
     def image_name(

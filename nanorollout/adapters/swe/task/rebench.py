@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import tempfile
 from typing import Any, Optional
 
@@ -56,6 +57,24 @@ def _apply_patch_command(test_patch: str) -> str:
     return f"git apply -v - <<'{delimiter}'\n{test_patch}\n{delimiter}"
 
 
+def _install_command(install_config: dict[str, Any]) -> Optional[str]:
+    install = install_config.get("install")
+    if not install:
+        return None
+    return str(install)
+
+
+def _test_command(instance: dict[str, Any], test_cmd: Any) -> str:
+    try:
+        from swebench.harness.test_spec.python import get_test_directives
+    except ImportError as exc:
+        raise _missing_package_error() from exc
+
+    command = str(test_cmd[-1] if isinstance(test_cmd, list) else test_cmd)
+    directives = [shlex.quote(str(item)) for item in get_test_directives(instance)]
+    return " ".join([command, *directives])
+
+
 def _resolve_parser(parser_name: str):
     try:
         from swebench.harness.log_parsers import python as python_parsers
@@ -95,22 +114,29 @@ def _build_eval_script(instance: dict[str, Any], workspace_dir: str) -> str:
     except ImportError as exc:
         raise _missing_package_error() from exc
 
-    return "\n".join(
+    eval_commands = [
+        "#!/bin/bash",
+        "set -uxo pipefail",
+        "source /opt/miniconda3/bin/activate",
+        "conda activate testbed",
+        f"cd {workspace_dir}",
+        f"git config --global --add safe.directory {workspace_dir}",
+    ]
+    install_command = _install_command(install_config)
+    if install_command:
+        eval_commands.append(install_command)
+    eval_commands.extend(
         [
-            "#!/bin/bash",
-            "set -uxo pipefail",
-            "source /opt/miniconda3/bin/activate",
-            "conda activate testbed",
-            f"cd {workspace_dir}",
-            f"git config --global --add safe.directory {workspace_dir}",
             reset_tests,
             _apply_patch_command(test_patch),
             f"echo '{START_TEST_OUTPUT}'",
-            str(test_cmd),
+            _test_command(instance, test_cmd),
             f"echo '{END_TEST_OUTPUT}'",
             reset_tests,
         ]
     )
+
+    return "\n".join(eval_commands)
 
 
 def _extract_marked_output(output: str) -> tuple[str, bool]:
@@ -152,10 +178,10 @@ def _build_report(
     report = get_eval_tests_report(
         status_map,
         gold_results,
-        EvalType.PASS_AND_FAIL,
         calculate_to_fail=bool(
             gold_results[FAIL_TO_FAIL] or gold_results[PASS_TO_FAIL]
         ),
+        eval_type=EvalType.PASS_AND_FAIL,
     )
     return report, get_resolution_status(report)
 

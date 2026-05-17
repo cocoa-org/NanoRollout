@@ -2,6 +2,7 @@
 Modal-based environment implementation.
 """
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -20,6 +21,21 @@ logger = logging.getLogger(__name__)
 
 _PWD_MARKER = "__NANOROLLOUT_PWD__"
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MODAL_OBJECT_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
+_MAX_MODAL_OBJECT_NAME_LENGTH = 63
+
+
+def _safe_modal_object_name(value: str, *, prefix: str = "nanorollout") -> str:
+    safe_value = _MODAL_OBJECT_NAME_SAFE_CHARS.sub("-", value).strip("-._")
+    if not safe_value:
+        safe_value = "task"
+
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+    unique = uuid.uuid4().hex[:8]
+    fixed_parts_len = len(prefix) + len(digest) + len(unique) + 3
+    max_value_len = _MAX_MODAL_OBJECT_NAME_LENGTH - fixed_parts_len
+    safe_value = safe_value[:max_value_len].rstrip("-._") or "task"
+    return f"{prefix}-{safe_value}-{digest}-{unique}"
 
 
 @dataclass
@@ -388,10 +404,7 @@ class ModalEnvironment(ShellEnvironment):
             return self.config.sandbox_name
 
         instance_id = str(self.instance.get("instance_id", "task"))
-        safe_instance = re.sub(r"[^A-Za-z0-9_.-]+", "-", instance_id).strip("-")
-        if not safe_instance:
-            safe_instance = "task"
-        return f"nanorollout-{safe_instance}-{uuid.uuid4().hex[:8]}"
+        return _safe_modal_object_name(instance_id)
 
     @staticmethod
     def _run_async(coro: Any) -> Any:
