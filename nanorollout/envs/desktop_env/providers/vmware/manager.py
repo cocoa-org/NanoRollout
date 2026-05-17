@@ -29,7 +29,7 @@ UBUNTU_X86_URL = "https://huggingface.co/datasets/xlangai/ubuntu_osworld/resolve
 WINDOWS_X86_URL = "https://huggingface.co/datasets/xlangai/windows_osworld/resolve/main/Windows-x86.zip"
 
 # Determine the platform and CPU architecture to decide the correct VM image to download
-# sometimes the system is 'Darwin' but the machine is x86-based.​​ 
+# sometimes the system is 'Darwin' but the machine is x86-based.​​
 if platform.machine().lower() in ['amd64', 'x86_64']:
     URL = UBUNTU_X86_URL
 elif platform.system() == 'Darwin':  # macOS
@@ -123,7 +123,7 @@ def _install_vm(vm_name, vms_dir, downloaded_file_name, os_type, original_vm_nam
         # Download the virtual machine image
         logger.info("Downloading the virtual machine image...")
         downloaded_size = 0
-        # sometimes the system is 'Darwin' but the machine is x86-based.​​ 
+        # sometimes the system is 'Darwin' but the machine is x86-based.​​
         if os_type == "Ubuntu":
             if platform.machine().lower() in ['amd64', 'x86_64']:
                 URL = UBUNTU_X86_URL
@@ -132,13 +132,13 @@ def _install_vm(vm_name, vms_dir, downloaded_file_name, os_type, original_vm_nam
         elif os_type == "Windows":
             if platform.machine().lower() in ['amd64', 'x86_64']:
                 URL = WINDOWS_X86_URL
-        
+
         # Check for HF_ENDPOINT environment variable and replace domain if set to hf-mirror.com
         hf_endpoint = os.environ.get('HF_ENDPOINT')
         if hf_endpoint and 'hf-mirror.com' in hf_endpoint:
             URL = URL.replace('huggingface.co', 'hf-mirror.com')
             logger.info(f"Using HF mirror: {URL}")
-        
+
         DOWNLOADED_FILE_NAME = URL.split('/')[-1]
         downloaded_file_name = DOWNLOADED_FILE_NAME
 
@@ -438,10 +438,10 @@ class VMwareVMManager(VMManager):
                 allocation_needed = True
             else:
                 # Choose the first free virtual machine
-                chosen_vm_path = free_vms_paths[0][0] 
+                chosen_vm_path = free_vms_paths[0][0]
                 self._occupy_vm(chosen_vm_path, os.getpid())
                 return chosen_vm_path
-            
+
         if allocation_needed:
             logger.info("No free virtual machine available. Generating a new one, which would take a while...☕")
             new_vm_name = generate_new_vm_name(vms_dir=VMS_DIR, os_type=os_type)

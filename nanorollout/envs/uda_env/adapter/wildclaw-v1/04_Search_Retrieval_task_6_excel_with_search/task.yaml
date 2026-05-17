@@ -1,0 +1,14 @@
+instruction: |
+  Please examine the two Excel files in `/tmp_workspace/04_Search_Retrieval_task_6_excel_with_search/files` and, with internet access, complete the following task:
+
+  1. In the CA worksheet of NPIAS-2023-2027-Appendix-A.xlsx, identify the airport in California with the highest Enplaned (CY21) among those whose Role (FY23) is Regional and whose Svc Lvl (FY23) is CS.
+
+  2. Answer: how many more enplanements did it need in order to become a primary airport in CY 2022?
+
+  Write your results into `/tmp_workspace/results/results.md`.
+
+  Output format:
+
+  Target airport: <airport name> (LocID: <code>)
+
+  Final answer: <integer>

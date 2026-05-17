@@ -1,0 +1,81 @@
+instruction: |
+  I manage a busy team calendar and need help resolving scheduling conflicts.
+
+  Please optimize the weekly schedule using the provided files in `/tmp_workspace/`:
+
+  - `calendar.ics`: an existing calendar containing 30 scheduled events
+  - `meeting_requests.json`: 15 new meeting requests, each with:
+    - `id`
+    - `title`
+    - `preferred_windows`
+    - `duration_minutes`
+    - `priority`
+    - `required_attendees`
+    - `optional_attendees`
+  - `constraints.yaml`: scheduling rules such as:
+    - no meetings during lunch break `12:00-13:00`
+    - each attendee can have at most 4 meetings per day
+    - some attendees may be unavailable on certain weekdays
+    - additional hard or soft constraints may be included
+
+  Your job:
+
+  1. Read the existing calendar and detect time conflicts.
+  2. Schedule as many new meeting requests as possible while respecting all hard constraints.
+  3. Prefer higher-priority meetings when not all requests can be scheduled.
+  4. If a request cannot be scheduled, explain the main reason clearly.
+  5. Save the results into `/tmp_workspace/results/` with the following files:
+     - `scheduled.ics`
+     - `unscheduled.json`
+     - `decision_log.md`
+
+  Use exactly the following output requirements and do not create any other files or directories.
+
+  ### `scheduled.ics`
+
+  - Must be a valid iCalendar file
+  - Must include all original events from `calendar.ics`
+  - Must add newly scheduled meetings as `VEVENT`s
+
+  ### `unscheduled.json`
+
+  Save a JSON array. Each unscheduled item must contain:
+
+  ```json
+  [
+    {
+      "id": "req_001",
+      "title": "Example Meeting",
+      "reason_code": "attendee_unavailable",
+      "reason_text": "Alice is unavailable in all preferred windows and no valid alternative slot satisfies the daily meeting limit."
+    }
+  ]
+  ```
+
+  ### `decision_log.md`
+
+  Use exactly the following structure:
+
+  ```markdown
+  ### Scheduling Decision Log
+
+  ### Summary
+  - Total requests: 15
+  - Scheduled: <number>
+  - Unscheduled: <number>
+  - Total priority weight achieved: <number>
+
+  ### High Priority Decisions
+  - Explain important trade-offs, especially when a lower-priority meeting was dropped in favor of a higher-priority one.
+
+  ### Unscheduled Requests
+  - `req_xxx` — concise explanation
+  ```
+
+  Important rules:
+
+  - Do not delete or modify original calendar events.
+  - Do not schedule meetings outside all candidate windows unless a request explicitly allows flexibility.
+  - Required attendees must all be available for a meeting to be scheduled.
+  - Lunch break, per-day meeting cap, and attendee unavailability are hard constraints.
+  - If multiple valid schedules exist, prefer the one with the highest total scheduled priority.

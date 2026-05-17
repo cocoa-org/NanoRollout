@@ -76,7 +76,9 @@ class OpenCode(InstalledAgentBase):
         if timestamp_ms is None:
             return None
         try:
-            return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
+            return datetime.fromtimestamp(
+                timestamp_ms / 1000, tz=timezone.utc
+            ).isoformat()
         except (OSError, ValueError, OverflowError):
             return None
 
@@ -248,7 +250,11 @@ class OpenCode(InstalledAgentBase):
                     turns.append(current_turn)
                     current_turn = None
                 continue
-            if current_turn is not None and event_type in ("text", "reasoning", "tool_use"):
+            if current_turn is not None and event_type in (
+                "text",
+                "reasoning",
+                "tool_use",
+            ):
                 current_turn["parts"].append(event.get("part", {}))
 
         steps: list[dict[str, Any]] = []

@@ -1,0 +1,34 @@
+minimum_pre_commit_version: "3.5.0"
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+        exclude: ^examples/eval/
+      - id: trailing-whitespace
+        exclude: ^examples/eval/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(nanorollout/(runner\.py|core/runners\.py|adapters/|harness/agents/shared/)|tests/core/)
+      - id: ruff-format
+        files: ^(nanorollout/(runner\.py|core/runners\.py|adapters/|harness/agents/shared/)|tests/core/)
+
+  - repo: local
+    hooks:
+      - id: runner-contract-tests
+        name: runner contract tests
+        entry: pytest -q tests/core/test_runners.py
+        language: system
+        pass_filenames: false
+        files: ^(nanorollout/(runner\.py|core/runners\.py|adapters/|harness/agents/shared/)|tests/core/)

@@ -1,0 +1,12 @@
+instruction: |
+  工作目录 `/tmp_workspace/` 下有一张社交媒体宣传海报 `/tmp_workspace/poster_original.png`。
+
+  请针对以下社交媒体平台的发布规范，对这张海报进行智能裁切，输出三个适配版本到 `/tmp_workspace/results/`：
+
+  | 文件名 | 适配平台 |
+  |--------|----------|
+  | `/tmp_workspace/results/crop_ins_square.png` | Instagram 正方形信息流帖子 |
+  | `/tmp_workspace/results/crop_tiktok.png` | TikTok / Instagram Reels 全屏竖版 |
+  | `/tmp_workspace/results/crop_ins_portrait.png` | Instagram 竖版帖子（Portrait） |
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

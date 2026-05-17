@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from nanorollout.envs.shell_env.base import ShellEnvironment
@@ -140,7 +140,11 @@ class ClaudeCode(InstalledAgentBase):
             if not jsonl_files:
                 continue
             session_dirs = list(
-                {file.parent for file in jsonl_files if "subagents" not in file.parent.parts}
+                {
+                    file.parent
+                    for file in jsonl_files
+                    if "subagents" not in file.parent.parts
+                }
             )
             if session_dirs:
                 project_sessions[project_dir] = session_dirs
@@ -273,7 +277,9 @@ class ClaudeCode(InstalledAgentBase):
             metadata = {"tool_use_result": tool_use_result}
             stdout = tool_use_result.get("stdout")
             stderr = tool_use_result.get("stderr")
-            exit_code = tool_use_result.get("exitCode") or tool_use_result.get("exit_code")
+            exit_code = tool_use_result.get("exitCode") or tool_use_result.get(
+                "exit_code"
+            )
             interrupted = tool_use_result.get("interrupted")
             is_image = tool_use_result.get("isImage")
 
@@ -293,7 +299,14 @@ class ClaudeCode(InstalledAgentBase):
                 key: value
                 for key, value in tool_use_result.items()
                 if key
-                not in {"stdout", "stderr", "exitCode", "exit_code", "interrupted", "isImage"}
+                not in {
+                    "stdout",
+                    "stderr",
+                    "exitCode",
+                    "exit_code",
+                    "interrupted",
+                    "isImage",
+                }
             }
             if remaining_meta:
                 formatted_chunks.append(
@@ -313,13 +326,19 @@ class ClaudeCode(InstalledAgentBase):
         result_text = "\n\n".join(part for part in parts if part).strip()
         return (result_text or None), metadata
 
-    def _convert_event_to_step(self, event: dict[str, Any], step_id: int) -> dict[str, Any]:
+    def _convert_event_to_step(
+        self, event: dict[str, Any], step_id: int
+    ) -> dict[str, Any]:
         kind = event.get("kind")
         timestamp = event.get("timestamp")
 
         if kind == "message":
             role = event.get("role", "user")
-            source = "agent" if role == "assistant" else ("user" if role == "user" else "system")
+            source = (
+                "agent"
+                if role == "assistant"
+                else ("user" if role == "user" else "system")
+            )
             step: dict[str, Any] = {
                 "step_id": step_id,
                 "timestamp": timestamp,
@@ -564,7 +583,11 @@ class ClaudeCode(InstalledAgentBase):
                     if not call_id:
                         continue
                     raw_arguments = tool_block.get("input")
-                    arguments = raw_arguments if isinstance(raw_arguments, dict) else {"input": raw_arguments}
+                    arguments = (
+                        raw_arguments
+                        if isinstance(raw_arguments, dict)
+                        else {"input": raw_arguments}
+                    )
                     call_extra = extra.copy()
                     if tool_block.get("is_error") is not None:
                         call_extra["tool_use_is_error"] = tool_block.get("is_error")
@@ -582,7 +605,9 @@ class ClaudeCode(InstalledAgentBase):
                         "status": tool_block.get("status"),
                         "message": None,
                         "extra": call_extra or None,
-                        "metrics": metrics if index == 0 and metrics is not None else None,
+                        "metrics": metrics
+                        if index == 0 and metrics is not None
+                        else None,
                         "model_name": model_name,
                     }
                     if index == 0 and metrics is not None:
@@ -600,7 +625,9 @@ class ClaudeCode(InstalledAgentBase):
                                 "timestamp": timestamp,
                                 "role": "user",
                                 "text": text,
-                                "extra": {"is_sidechain": event.get("isSidechain", False)},
+                                "extra": {
+                                    "is_sidechain": event.get("isSidechain", False)
+                                },
                             }
                         )
                     continue
@@ -608,12 +635,17 @@ class ClaudeCode(InstalledAgentBase):
                 if isinstance(content, list):
                     text_parts: list[str] = []
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_result"
+                        ):
                             call_id = block.get("tool_use_id")
                             formatted_output, metadata = self._format_tool_result(
                                 block, event.get("toolUseResult")
                             )
-                            call_info = pending_calls.pop(call_id, None) if call_id else None
+                            call_info = (
+                                pending_calls.pop(call_id, None) if call_id else None
+                            )
                             if call_info is None:
                                 call_info = {
                                     "kind": "tool_call",
@@ -636,18 +668,24 @@ class ClaudeCode(InstalledAgentBase):
                             if metadata:
                                 extra.setdefault("tool_result_metadata", metadata)
                             if block.get("is_error") is not None:
-                                extra.setdefault("tool_result_is_error", block.get("is_error"))
+                                extra.setdefault(
+                                    "tool_result_is_error", block.get("is_error")
+                                )
                             call_info["extra"] = extra or None
                             call_info["output"] = formatted_output
                             call_info["metadata"] = metadata
-                            call_info["timestamp"] = call_info.get("timestamp") or timestamp
+                            call_info["timestamp"] = (
+                                call_info.get("timestamp") or timestamp
+                            )
                             call_info.setdefault("model_name", default_model_name)
                             normalized_events.append(call_info)
                             continue
                         text_parts.append(self._stringify(block))
 
                     text_message = "\n\n".join(
-                        part.strip() for part in text_parts if part and str(part).strip()
+                        part.strip()
+                        for part in text_parts
+                        if part and str(part).strip()
                     )
                     if text_message:
                         normalized_events.append(
@@ -680,7 +718,11 @@ class ClaudeCode(InstalledAgentBase):
                 step = self._convert_event_to_step(event, index)
             except ValueError:
                 continue
-            if step.get("source") == "agent" and not step.get("model_name") and default_model_name:
+            if (
+                step.get("source") == "agent"
+                and not step.get("model_name")
+                and default_model_name
+            ):
                 step["model_name"] = default_model_name
             steps.append(step)
         if not steps:
@@ -694,7 +736,8 @@ class ClaudeCode(InstalledAgentBase):
         completion_values = [
             step["metrics"]["completion_tokens"]
             for step in steps
-            if step.get("metrics") and step["metrics"].get("completion_tokens") is not None
+            if step.get("metrics")
+            and step["metrics"].get("completion_tokens") is not None
         ]
         cached_values = [
             step["metrics"]["cached_tokens"]
@@ -740,7 +783,9 @@ class ClaudeCode(InstalledAgentBase):
             "steps": steps,
             "final_metrics": {
                 "total_prompt_tokens": sum(prompt_values) if prompt_values else None,
-                "total_completion_tokens": sum(completion_values) if completion_values else None,
+                "total_completion_tokens": sum(completion_values)
+                if completion_values
+                else None,
                 "total_cached_tokens": sum(cached_values) if cached_values else None,
                 "total_cost_usd": self._parse_total_cost_from_stream_json(),
                 "total_steps": len(steps),
@@ -777,7 +822,11 @@ class ClaudeCode(InstalledAgentBase):
                     "args": server.args,
                 }
             else:
-                transport = "http" if server.transport == "streamable-http" else server.transport
+                transport = (
+                    "http"
+                    if server.transport == "streamable-http"
+                    else server.transport
+                )
                 servers[server.name] = {"type": transport, "url": server.url}
         config = json.dumps({"mcpServers": servers}, indent=2)
         return f"cat > $CLAUDE_CONFIG_DIR/.claude.json <<'EOF'\n{config}\nEOF"
@@ -805,7 +854,9 @@ class ClaudeCode(InstalledAgentBase):
             or "",
             "ANTHROPIC_BASE_URL": self._get_env("ANTHROPIC_BASE_URL"),
             "CLAUDE_CODE_OAUTH_TOKEN": self._get_env("CLAUDE_CODE_OAUTH_TOKEN") or "",
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": self._get_env("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": self._get_env(
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+            ),
             "FORCE_AUTO_BACKGROUND_TASKS": "1",
             "ENABLE_BACKGROUND_TASKS": "1",
         }
@@ -825,7 +876,9 @@ class ClaudeCode(InstalledAgentBase):
                 if value:
                     env[key] = value
             env["AWS_REGION"] = self._get_env("AWS_REGION") or "us-east-1"
-            small_model_region = self._get_env("ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION") or ""
+            small_model_region = (
+                self._get_env("ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION") or ""
+            )
             if small_model_region:
                 env["ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION"] = small_model_region
             if (self._get_env("DISABLE_PROMPT_CACHING") or "").strip() == "1":
@@ -853,7 +906,9 @@ class ClaudeCode(InstalledAgentBase):
             env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = env["ANTHROPIC_MODEL"]
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = env["ANTHROPIC_MODEL"]
 
-        if (self._get_env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING") or "").strip() == "1":
+        if (
+            self._get_env("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING") or ""
+        ).strip() == "1":
             env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
 
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"

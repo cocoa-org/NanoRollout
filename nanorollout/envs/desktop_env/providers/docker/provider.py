@@ -40,7 +40,7 @@ class DockerProvider(Provider):
         """Get all currently used ports (both system and Docker)."""
         # Get system ports
         system_ports = set(conn.laddr.port for conn in psutil.net_connections())
-        
+
         # Get Docker container ports
         docker_ports = set()
         for container in self.client.containers.list():
@@ -49,7 +49,7 @@ class DockerProvider(Provider):
                 for port_mappings in ports.values():
                     if port_mappings:
                         docker_ports.update(int(p['HostPort']) for p in port_mappings)
-        
+
         return system_ports | docker_ports
 
     def _get_available_port(self, start_port: int) -> int:
@@ -65,7 +65,7 @@ class DockerProvider(Provider):
     def _wait_for_vm_ready(self, timeout: int = 300):
         """Wait for VM to be ready by checking screenshot endpoint."""
         start_time = time.time()
-        
+
         def check_screenshot():
             try:
                 response = requests.get(
@@ -81,13 +81,13 @@ class DockerProvider(Provider):
                 return True
             logger.info("Checking if virtual machine is ready...")
             time.sleep(RETRY_INTERVAL)
-        
+
         raise TimeoutError("VM failed to become ready within timeout period")
 
     def start_emulator(self, path_to_vm: str, headless: bool, os_type: str):
         # Use a single lock for all port allocation and container startup
         lock = FileLock(str(self.lock_file), timeout=LOCK_TIMEOUT)
-        
+
         try:
             with lock:
                 # Allocate all required ports

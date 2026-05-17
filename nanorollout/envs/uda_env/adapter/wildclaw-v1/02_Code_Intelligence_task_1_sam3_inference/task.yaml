@@ -1,0 +1,67 @@
+instruction: |
+  你是一名 AI 编程专家。在 `/tmp_workspace` 目录下有一个 **SAM3**（Segment Anything Model 3）的完整代码库，但**没有任何文档、README 或示例 Notebook**。你需要通过阅读源代码，理解 SAM3 的使用方法，然后编写推理脚本完成以下 4 个目标检测用例。
+
+  ### 任务
+
+  请编写一个 Python 推理脚本，在测试图像上运行以下 4 个用例，并将结果保存到 `/tmp_workspace/results/predictions.json`。
+
+  ### 关键信息
+
+  - **Python 环境**: `~/miniconda3/envs/eval`
+  - **SAM3 代码库**: `/tmp_workspace/sam3/`
+  - **测试图像**: `/tmp_workspace/sam3/assets/images/test_image.jpg`
+  - **模型权重**: `/tmp_workspace/sam3/sam3.pt`
+  - **输出文件**: `/tmp_workspace/results/predictions.json`
+  - **运行设备**: CPU
+
+  ### 测试用例
+
+  你需要实现以下 4 个推理用例：
+
+  **用例 1: `text_shoe`** 
+  - 使用文本提示 `"shoe"` 在图像中检测鞋子
+  - 置信度阈值：0.5
+
+  **用例 2: `single_box`** 
+  - 使用一个 bounding box：`[480.0, 290.0, 110.0, 360.0]`
+  - 置信度阈值：0.5
+
+  **用例 3: `multi_box`** 
+  - 使用两个 bounding box：`[[480.0, 290.0, 110.0, 360.0], [370.0, 280.0, 115.0, 375.0]]`
+  - 对应标签（正/负）：`[True, False]`
+  - 置信度阈值：0.5
+
+  **用例 4: `text_box_combined`** 
+  - 使用文本提示 `"child"` 和一个 bounding box：`[480.0, 290.0, 110.0, 360.0]`
+  - 置信度阈值：0.5
+
+  ### 输出格式
+
+  `predictions.json` 必须符合以下 JSON 格式：
+
+  ```json
+  {
+    "image": "test_image.jpg",
+    "image_size": [宽, 高],
+    "cases": {
+      "text_shoe": {
+        "boxes_xyxy": [[x1, y1, x2, y2], ...],
+        "scores": [score1, ...]
+      },
+      "single_box": {
+        "boxes_xyxy": [[x1, y1, x2, y2], ...],
+        "scores": [score1, ...]
+      },
+      "multi_box": {
+        "boxes_xyxy": [[x1, y1, x2, y2], ...],
+        "scores": [score1, ...]
+      },
+      "text_box_combined": {
+        "boxes_xyxy": [[x1, y1, x2, y2], ...],
+        "scores": [score1, ...]
+      }
+    }
+  }
+  ```
+
+  其中 `boxes_xyxy` 是 `[x_min, y_min, x_max, y_max]` 格式的检测框坐标（像素单位），`scores` 是对应的置信度分数。

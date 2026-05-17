@@ -8,30 +8,30 @@ The following sections contain guidelines for configuring the system image to en
 
 The main configuration requirements include:
 
-1. **Account Credentials**: 
-Our benchmark configurations are based on specific username and password settings (with username `user` and password `password`). 
+1. **Account Credentials**:
+Our benchmark configurations are based on specific username and password settings (with username `user` and password `password`).
 Please ensure these settings remain consistent or update the corresponding configuration files.
 
-2. **Service Setup**: 
+2. **Service Setup**:
 Our environment operates through a service that automatically starts at boot time, as shown in the figure below. The service needs to be properly configured and placed.
 ![](https://os-world.github.io/static/images/env.png)
 
-3. **Accessibility Tree Support**:  
+3. **Accessibility Tree Support**:
 Benchmark examples rely on accessibility tree functionality. The necessary support packages need to be installed.
 
-4. **System Service Management**:  
+4. **System Service Management**:
 Certain system services that may cause interference need to be disabled, such as automatic updates and notification pop-ups.
 
-5. **Required Software Installation**:  
+5. **Required Software Installation**:
 Ensure all necessary software packages required by the benchmark examples are properly installed.
 
-6. **Software Configuration**: 
+6. **Software Configuration**:
 Various software packages require specific configurations, such as disabling certain auto-save features or installing additional plugins.
 
-7. **Port Configuration**: 
+7. **Port Configuration**:
 To monitor and control software states from the host machine, specific port configurations are needed for various applications.
 
-8. **Miscellaneous Settings**: 
+8. **Miscellaneous Settings**:
 Additional system-specific settings need to be configured, such as desktop environment settings and display resolution.
 
 Detailed instructions for each of these requirements will be provided in the following sections.
@@ -51,7 +51,7 @@ sudo systemctl set-default graphical.target
 
 ### Account Credentials
 
-Download the iso file from the [Ubuntu website](https://ubuntu.com/download/alternative-downloads) and install it in the VM. 
+Download the iso file from the [Ubuntu website](https://ubuntu.com/download/alternative-downloads) and install it in the VM.
 
 Using GUI:
 The default username should be `user` and the password should be `password` when you are asked to set up the account. Give the user sudo permission.
@@ -64,7 +64,7 @@ usermod -aG sudo user
 
 ### Installation and Auto-login Setup
 
-1. Download the iso file from the [Ubuntu website](https://ubuntu.com/download/alternative-downloads) and install it in the VM. 
+1. Download the iso file from the [Ubuntu website](https://ubuntu.com/download/alternative-downloads) and install it in the VM.
 The default username should be `user` and the password should be `password` when you are asked to set up the account.
 
 2. To enable automatic login:
@@ -399,7 +399,7 @@ echo $XDG_SESSION_TYPE
 
 ### System Service Management (Optional)
 
-The automatic software update service can interfere with benchmark examples. To disable this service, you can refer to the https://www.makeuseof.com/disable-automatic-updates-in-ubuntu/ for the solution. 
+The automatic software update service can interfere with benchmark examples. To disable this service, you can refer to the https://www.makeuseof.com/disable-automatic-updates-in-ubuntu/ for the solution.
 
 You can check and manage system services using systemctl commands. For example, to verify if a service like unattended-upgrades is installed and running on your system:
 
@@ -440,8 +440,8 @@ Since for some examples like change the settings of certain software, we hardcod
 > **⚠️ IMPORTANT NOTE**: The software installation and configuration steps described in this section are crucial for maintaining consistent task execution and performance. Skipping or incorrectly configuring these components may lead to task failures or degraded performance. Please follow the installation instructions carefully and verify each component is properly set up before proceeding.
 
 
-##### LibreOffice font installation 
-Some examples in LibreOffice Impress use non-default system fonts, and you need to download the corresponding **TTF files** and put them in the system fonts directory. 
+##### LibreOffice font installation
+Some examples in LibreOffice Impress use non-default system fonts, and you need to download the corresponding **TTF files** and put them in the system fonts directory.
 [Here](https://huggingface.co/datasets/xlangai/ubuntu_osworld_file_cache/resolve/main/fonts_20250608_fixed.zip) we provides all the fonts downloaded, just download it, and unzip to the system fonts directory (which usually `usr/share/fonts/`).
 ```bash
 unzip fonts.zip -d /usr/share/fonts/
@@ -553,7 +553,7 @@ The following is the screenshot of the VLC configuration:
 When VLC is open, the service will be running on port 8080.
 
 ##### Chrome Configuration
-When you open Chrome through the GUI interface, it doesn't automatically enable remote debugging port 1337 (the port we set for controlling the client machine's Chrome through the host, which gets forwarded to 9222). 
+When you open Chrome through the GUI interface, it doesn't automatically enable remote debugging port 1337 (the port we set for controlling the client machine's Chrome through the host, which gets forwarded to 9222).
 This is because GUI startup and command-line startup use different parameters.
 The consequence is that once Chrome is closed and reopened, it will fail to connect.
 To ensure Chrome uses consistent debugging ports even after being closed and reopened, follow these steps:
@@ -579,11 +579,11 @@ Exec=/usr/bin/google-chrome-stable --remote-debugging-port=1337 --remote-debuggi
 In cases where Chrome is needed, the 1337 will be forwarded to 9222 in the virtual machine via socat.
 
 
-### Miscellaneous Settings  
+### Miscellaneous Settings
 
 #### Screen Resolution
 
-The required screen resolution for the virtual machine is 1920x1080 in OSWorld and we did make some hardcode related to this resolution in our configuration file in some examples, but only a few. 
+The required screen resolution for the virtual machine is 1920x1080 in OSWorld and we did make some hardcode related to this resolution in our configuration file in some examples, but only a few.
 So please set the screen resolution to 1920x1080 in the virtual machine settings.
 
 #### Automatic Suspend

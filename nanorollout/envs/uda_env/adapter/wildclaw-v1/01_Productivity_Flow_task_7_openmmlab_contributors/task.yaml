@@ -1,0 +1,14 @@
+instruction: |
+  请先识别出满足要求的 OpenMMLab repo 集合，再整理这些 repo 中的主要 contributor 列表（GitHub ID），以及他们在这些 repo 中主要 contribute 的项目和对应的 commit 数量。
+
+  本任务中，项目范围固定为满足以下条件的 OpenMMLab repo 集合：不是 fork、属于项目型仓库（排除例如组织级配置仓库 `.github`），并且以 GitHub 仓库元数据中的 `pushed_at` 为准，在 `2025-10-01T00:00:00Z` 之前已停止更新，即 `pushed_at < 2025-10-01T00:00:00Z`。
+
+  输出要求：
+
+  1. 将 repo 名称列表保存为 `/tmp_workspace/results/repos.txt`，`repos.txt` 中每行一个 GitHub repo 名称。
+  2. 将 contributor 结果保存为 `/tmp_workspace/results/contributors.jsonl`。
+  3. `contributors.jsonl` 必须是 JSONL 格式，每行一个 JSON object。
+  4. 每行代表一个 contributor，格式如下：
+     `{"user": "hellock", "project": {"mmdetection": 1234}}`
+  5. `user` 字段是 contributor 的 GitHub ID。
+  6. `project` 字段是一个 JSON object，需包含该 contributor 在 repo 集合中所有 commit 数量不少于 30 的 repo；key 为对应 repo 名称，value 为该 contributor 在该 repo 中的 commit 数量。

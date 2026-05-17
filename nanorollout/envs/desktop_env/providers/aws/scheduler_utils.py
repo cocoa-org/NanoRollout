@@ -149,5 +149,3 @@ def schedule_instance_termination(region: str, instance_id: str, ttl_seconds: in
     if last_err is not None:
         # If we exhausted retries, re-raise to surface warning upstream
         raise last_err
-
-

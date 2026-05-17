@@ -37,11 +37,11 @@ OSWorld requires certain ports to be open, such as port 5000 for backend connect
 Configure according to your specific requirements. This project provides a monitor service that runs on port 8080 by default. You need to open this port to use this functionality.
 
 
-## VPC Configuration  
+## VPC Configuration
 To isolate the entire evaluation stack, we run both the host machine and all client virtual machines inside a dedicated VPC. The setup is straightforward:
 
-1. Launch the host instance via the AWS console and note the **VPC ID** and **Subnet ID** shown in its network settings.  
-2. Export the same **Subnet ID** as the environment variable `AWS_SUBNET_ID` before starting the client code.  
+1. Launch the host instance via the AWS console and note the **VPC ID** and **Subnet ID** shown in its network settings.
+2. Export the same **Subnet ID** as the environment variable `AWS_SUBNET_ID` before starting the client code.
    ```bash
    export AWS_SUBNET_ID=subnet-xxxxxxxxxxxxxxxxx
    ```

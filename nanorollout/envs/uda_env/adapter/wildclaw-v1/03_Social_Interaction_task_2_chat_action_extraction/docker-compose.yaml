@@ -1,0 +1,12 @@
+version: '3'
+services:
+  wildclaw:
+    build: .
+    image: wildclaw-task:03_Social_Interaction_task_2_chat_action_extraction
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL}
+    volumes:
+      - ./:/tmp_workspace
+    working_dir: /tmp_workspace

@@ -210,6 +210,32 @@ def _add_cocoa_run_args(run_parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_uda_run_args(run_parser: argparse.ArgumentParser) -> None:
+    """UDA tasks reuse the CocoaBench-shaped arg surface (verifier loading,
+    encryption, iteration budgets) and add ``--bench`` for selecting which
+    pre-migrated adapter folder under ``envs/uda_env/adapter/<bench>/`` to
+    load tasks from."""
+    _add_cocoa_run_args(run_parser)
+    run_parser.add_argument(
+        "--bench",
+        default=None,
+        help=(
+            "Benchmark adapter to load tasks from. Maps to "
+            "nanorollout/envs/uda_env/adapter/<bench>/<instance_id>/. "
+            "Defaults to 'cocoa-v1'. Drop a new migrated corpus under "
+            "adapter/<name>/ and pass --bench <name> — no code changes required."
+        ),
+    )
+    run_parser.add_argument(
+        "--uda-tasks-dir",
+        default=None,
+        help=(
+            "Override the adapter root. Normally unused — the runner auto-resolves "
+            "to nanorollout/envs/uda_env/adapter/<bench>/ inside the package."
+        ),
+    )
+
+
 def _add_osworld_run_args(run_parser: argparse.ArgumentParser) -> None:
     run_parser.add_argument("--max-steps", type=int, default=15)
     run_parser.add_argument("--region", default="us-east-1")
@@ -261,6 +287,8 @@ def build_parser(
         _add_terminal_run_args(run_parser)
     elif task == "cocoa-bench":
         _add_cocoa_run_args(run_parser)
+    elif task == "uda":
+        _add_uda_run_args(run_parser)
     elif task == "osworld":
         _add_osworld_run_args(run_parser)
     return parser
@@ -370,6 +398,24 @@ COCOA_EXTRA_ARG_FIELDS = {
 }
 
 
+UDA_EXTRA_ARG_FIELDS = {
+    *RUNNER_TIMEOUT_EXTRA_ARG_FIELDS,
+    "tasks_dir",
+    "repo_url",
+    "repo_dir",
+    "repo_revision",
+    "refresh_repo",
+    "tasks_subdir",
+    "controller_type",
+    "client_type",
+    "docker_port",
+    "log_level",
+    "use_encrypted_tasks",
+    "uda_tasks_dir",
+    "bench",
+}
+
+
 OSWORLD_EXTRA_ARG_FIELDS = {
     "max_steps",
     "region",
@@ -394,6 +440,8 @@ def _extra_arg_fields_for_task(task: str) -> set[str]:
         return TERMINAL_EXTRA_ARG_FIELDS
     if task == "cocoa-bench":
         return COCOA_EXTRA_ARG_FIELDS
+    if task == "uda":
+        return UDA_EXTRA_ARG_FIELDS
     if task == "osworld":
         return OSWORLD_EXTRA_ARG_FIELDS
     return set()
@@ -456,6 +504,22 @@ def _build_extra_args(
             "docker_port": getattr(args, "docker_port", None),
             "log_level": getattr(args, "log_level", "INFO"),
             "use_encrypted_tasks": getattr(args, "use_encrypted_tasks", None),
+        }
+    elif task == "uda":
+        defaults = {
+            **runner_defaults,
+            "tasks_dir": getattr(args, "tasks_dir", None),
+            "repo_dir": getattr(args, "repo_dir", None),
+            "repo_revision": getattr(args, "repo_revision", None),
+            "refresh_repo": getattr(args, "refresh_repo", False),
+            "tasks_subdir": getattr(args, "tasks_subdir", None),
+            "controller_type": getattr(args, "controller_type", None),
+            "client_type": getattr(args, "client_type", "unified"),
+            "docker_port": getattr(args, "docker_port", None),
+            "log_level": getattr(args, "log_level", "INFO"),
+            "use_encrypted_tasks": getattr(args, "use_encrypted_tasks", None),
+            "uda_tasks_dir": getattr(args, "uda_tasks_dir", None),
+            "bench": getattr(args, "bench", None),
         }
     elif task == "osworld":
         defaults = {
@@ -609,9 +673,7 @@ def _run_direct(config: ServerConfig, args: argparse.Namespace) -> None:
         concurrency=args.concurrency,
         show_progress=not args.no_progress,
     )
-    responses = runner.run_many(requests)
-    payload = [response.model_dump() for response in responses]
-    print(json.dumps(payload[0] if len(payload) == 1 else payload, indent=2))
+    runner.run_many(requests)
 
 
 def _serve(config: ServerConfig) -> None:

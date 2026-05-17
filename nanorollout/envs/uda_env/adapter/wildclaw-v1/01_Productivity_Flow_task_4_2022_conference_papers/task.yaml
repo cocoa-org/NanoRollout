@@ -1,0 +1,87 @@
+instruction: |
+  Please compile all papers authored or co-authored by **Kaiming He** that were published at **academic conferences in 2022** and save them to:
+
+  - `/tmp_workspace/results/2022.tsv`
+
+  Your goal is to produce a clean, complete TSV file containing one row per paper.
+
+  Use the following fields in this exact order:
+
+  1. **Conference**: the conference name, using its standard abbreviation (for example: `CVPR`, `ICCV`, `ICML`, `NeurIPS`)
+  2. **Title**: the paper title, exactly as listed on the official conference website
+  3. **Authors**: the full author list in official order, separated by commas, with each name written in default order (`given name` first, `family name` last)
+  4. **Abstract**: the paper abstract
+  5. **Author links**: the personal homepage link for each author of the paper, if available, listed in author order using the format `"Author Name: link"`, separated by commas; if no reliable personal homepage can be found for an author, use `"Author Name: not found"`
+  6. **GitHub commit id**: inspect the latest available paper version and determine whether the paper text includes a GitHub or repository link for the paper's official code release; if so, resolve that repository and record the most recent commit id of the paper project as of 2026-03-19; if not, write `not found`
+
+  Scope and inclusion rules:
+
+  - Include only papers whose official conference publication year is **2022**
+  - Use the **official conference website or official conference proceedings page** as the source of truth for `Conference`, `Title`, `Authors`, and `Abstract`
+  - Include only papers that are part of the main conference proceedings
+  - Exclude workshops, tutorials, challenge reports, demos, journal-only versions, arXiv-only preprints, theses, and blog posts
+
+  For `Author links`:
+
+  - Preserve the same author order as the `Authors` field
+  - Prefer a personal academic homepage or personal website over a general lab page, Google Scholar profile, DBLP page, ORCID page, or LinkedIn page
+  - If multiple plausible personal homepages exist, choose the most direct stable homepage
+  - If no reliable personal homepage can be found, write `not found`
+
+  For `GitHub commit id`:
+
+  - Determine this field using the latest available paper version
+  - You may output either the full commit hash or an unambiguous short commit hash
+  - If the latest paper version does not include such a repository link, write `not found`
+
+  ### Output Requirements
+
+  You must create the following outputs under `/tmp_workspace/results/`:
+
+  - `2022.tsv`
+  - one or more paper source `.tex` files
+
+  Do not create any other files or directories under `results/`.
+
+  #### TSV Format
+
+  The TSV file must:
+
+  - be UTF-8 encoded
+  - contain exactly one header row
+  - use tab (`\t`) as the delimiter
+  - use exactly the following header:
+
+  ```text
+  Conference  Title   Authors Abstract    Author links    GitHub commit id
+  ```
+
+  - contain exactly one row per paper
+  - not contain duplicate papers
+  - be sorted by `Conference` ascending, then by `Title` ascending
+  - not contain embedded newlines inside any field
+  - not contain markdown, comments, explanations, or extra prose
+
+  Field formatting rules:
+
+  - `Conference` should be a standard conference abbreviation
+  - `Title` must match the official conference title exactly
+  - `Authors` must be a single line like `Author A, Author B, Author C`
+  - `Abstract` must be a single line with internal whitespace normalized if needed
+  - `Author links` must be a single line like `Author A: https://example.com, Author B: not found`
+  - Every author listed in `Authors` must appear exactly once in `Author links`, in the same order
+  - `GitHub commit id` must be either `not found` or a Git commit hash (short or full hexadecimal form)
+
+  #### arXiv TeX Source Files
+
+  For every paper listed in `2022.tsv`, also download the corresponding arXiv source and save the **main paper `.tex` file** for every available arXiv version.
+
+  Rules:
+
+  - Save the `.tex` files directly under `/tmp_workspace/results/`
+  - Keep only the final required `.tex` files; do not leave downloaded archives, extracted folders, figures, `.sty`, `.bib`, or other auxiliary files
+  - If a paper has exactly one arXiv version, name the file `{title}.tex`
+  - If a paper has multiple arXiv versions, save only the versions that actually exist on arXiv and name them `{title}_v1.tex`, `{title}_v2.tex` ... 
+  - `{title}` means the exact paper title from the TSV `Title` field
+  - If the arXiv source package contains multiple `.tex` files, identify the primary top-level paper `.tex` file and save only that file's content
+  - Do not add explanations, comments, or extra text to the saved `.tex` files

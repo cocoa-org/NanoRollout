@@ -259,15 +259,15 @@ class CostTracker:
 
 def format_tools_as_text(tools: List[Dict[str, Any]]) -> str:
     """Convert OpenAI tool schema to text description for Qwen3-VL models.
-    
+
     Args:
         tools: List of tool definitions in OpenAI format
-        
+
     Returns:
         Formatted text description of all tools
     """
     tool_descriptions = []
-    
+
     for tool in tools:
         func = tool.get("function", {})
         name = func.get("name", "")
@@ -275,7 +275,7 @@ def format_tools_as_text(tools: List[Dict[str, Any]]) -> str:
         parameters = func.get("parameters", {})
         properties = parameters.get("properties", {})
         required = parameters.get("required", [])
-        
+
         # Build parameter descriptions
         param_descriptions = []
         for param_name, param_info in properties.items():
@@ -283,7 +283,7 @@ def format_tools_as_text(tools: List[Dict[str, Any]]) -> str:
             param_desc = param_info.get("description", "")
             param_enum = param_info.get("enum")
             param_default = param_info.get("default")
-            
+
             param_str = f"  - {param_name} ({param_type})"
             if param_desc:
                 param_str += f": {param_desc}"
@@ -293,16 +293,16 @@ def format_tools_as_text(tools: List[Dict[str, Any]]) -> str:
                 param_str += f" [default: {param_default}]"
             if param_name in required:
                 param_str += " [required]"
-            
+
             param_descriptions.append(param_str)
-        
+
         # Format tool description
         tool_text = f"- {name}: {description}"
         if param_descriptions:
             tool_text += "\n" + "\n".join(param_descriptions)
-        
+
         tool_descriptions.append(tool_text)
-    
+
     return "\n\n".join(tool_descriptions)
 
 
@@ -452,7 +452,7 @@ Before EVERY action, output a `Thought:` section explaining what you're about to
      - Viewport dimensions (if relevant)
 
 3. **Specific action requirements:**
-   - **Before `browser_type` or `browser_press`**: 
+   - **Before `browser_type` or `browser_press`**:
      - MUST verify cursor/focus is on correct element via screenshot
      - Ensure target input field is visible and focused
    - **Before `browser_drag_to/rel` or scrolling**:
@@ -479,7 +479,7 @@ Before EVERY action, output a `Thought:` section explaining what you're about to
   - Element removed from DOM after previous action
   - Element not yet loaded or visible
 - **Recovery strategies:**
-  - **If click/hover/type fails with "No element found with BID"**: 
+  - **If click/hover/type fails with "No element found with BID"**:
     - **IMMEDIATELY run `dom_mark_elements()` again** to get fresh BIDs
     - **DO NOT retry the same stale BID** - it will never work
     - Find the target element in the new BID list and use the new BID
@@ -760,7 +760,7 @@ Task:
      - Viewport dimensions (if relevant)
 
 3. **Specific action requirements:**
-   - **Before `browser_type` or `browser_press`**: 
+   - **Before `browser_type` or `browser_press`**:
      - MUST verify cursor/focus is on correct element via screenshot
      - Ensure target input field is visible and focused
    - **Before `browser_drag_to/rel` or scrolling**:
@@ -787,7 +787,7 @@ Task:
   - Element removed from DOM after previous action
   - Element not yet loaded or visible
 - **Recovery strategies:**
-  - **If click/hover/type fails with "No element found with BID"**: 
+  - **If click/hover/type fails with "No element found with BID"**:
     - **IMMEDIATELY run `dom_mark_elements()` again** to get fresh BIDs
     - **DO NOT retry the same stale BID** - it will never work
     - Find the target element in the new BID list and use the new BID
@@ -1007,10 +1007,10 @@ class Controller:
 
 class BaseLLM(Controller):
     """Base class for LLM controllers with common functionality."""
-    
+
     def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
         """Initialize base LLM controller.
-        
+
         Args:
             llm_config: Configuration dictionary
             client_type: Type of client (unified, browser, file, code, shell)
@@ -1018,12 +1018,12 @@ class BaseLLM(Controller):
         """
         if llm_config is None:
             llm_config = {}
-        
+
         # Common attributes
         self.model = llm_config.get("model", kwargs.get("model", ""))
         self.messages: List[Dict[str, Any]] = []
         self.last_think: str | None = None
-        
+
         # Cost tracking
         self.total_cost: float = 0.0
         self.total_input_tokens: int = 0
@@ -1042,12 +1042,12 @@ class BaseLLM(Controller):
         self.total_cost_cache_read_usd: float = 0.0
         self.api_calls: int = 0
         self.per_call_costs: list = []
-        
+
         # Store client type and determine tool usage
         self.client_type = client_type
         self.use_tools = client_type in ["browser", "file", "code", "jupyter", "shell", "unified"]
         self.max_parse_retries = max(1, int(llm_config.get("max_parse_retries", 5)))
-        
+
         # Load appropriate tools based on client type
         if self.use_tools:
             from nanorollout.envs.cocoa_env.tools import (
@@ -1071,26 +1071,26 @@ class BaseLLM(Controller):
                 self.tools = None
         else:
             self.tools = None
-    
+
     def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
         """Prepare message content from prompt and images.
-        
+
         Args:
             prompt: Text prompt
             images_base64: Optional list of base64-encoded images
-            
+
         Returns:
             Message content (string or list depending on provider)
         """
         # Handle backward compatibility: if single string is passed, convert to list
         if images_base64 is not None and isinstance(images_base64, str):
             images_base64 = [images_base64]
-        
+
         # Build message content based on whether we have images
         if images_base64 and len(images_base64) > 0:
             # Build content list with text and all images
             message_content = []
-            
+
             # Default: text first, then images (OpenAI format)
             # Subclasses can override this method to change the order
             message_content.append({
@@ -1138,53 +1138,53 @@ class BaseLLM(Controller):
         if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WEBP":
             return "image/webp"
         return "image/png"
-    
+
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
         """Handle API response and parse into action format.
-        
+
         This method should be implemented by subclasses to handle provider-specific responses.
-        
+
         Args:
             response: API response object
             attempt: Current attempt number
             max_attempts: Maximum number of attempts
-            
+
         Returns:
             Parsed response dictionary
         """
         raise NotImplementedError("Subclasses must implement _handle_api_response")
-    
+
     def call(self, prompt: str, images_base64: list = None) -> Dict[str, Any]:
         """Send prompt to LLM API and return parsed response.
-        
+
         Args:
             prompt: The prompt string to send to the LLM
             images_base64: Optional list of base64-encoded image strings
-            
+
         Returns:
             Parsed response dictionary with action information
         """
         # Prepare message content
         message_content = self._prepare_message_content(prompt, images_base64)
         self.messages.append({"role": "user", "content": message_content})
-        
+
         attempt = 0
         max_attempts = self.max_parse_retries
-        
+
         while attempt < max_attempts:
             attempt += 1
             logger.debug(f"Sending prompt to {self.model} (conversation depth: {len(self.messages)}, attempt {attempt}/{max_attempts})")
-            
+
             try:
                 # Call provider-specific API
                 response = self._make_api_call()
-                
+
                 # Handle response (provider-specific)
                 parsed_response = self._handle_api_response(response, attempt, max_attempts)
-                
+
                 # Cleanup old images after successful call
                 self._cleanup_old_user_message_images()
-                
+
                 return parsed_response
             except Exception as e:
                 logger.error(f"Error calling LLM API: {e}")
@@ -1199,20 +1199,20 @@ class BaseLLM(Controller):
                 logger.info(f"Retrying in {sleep_time}s (attempt {attempt}/{max_attempts})...")
                 time.sleep(sleep_time)
                 continue
-        
+
         raise ValueError("Failed to obtain a valid action after retrying LLM response parsing.")
-    
+
     def _make_api_call(self) -> Any:
         """Make the actual API call. Must be implemented by subclasses.
-        
+
         Returns:
             API response object
         """
         raise NotImplementedError("Subclasses must implement _make_api_call")
-    
+
     def build_prompt(self, task_description: str = None, feedback: str = None, conversation_history: list = None) -> str:
         """Build the initial prompt for the LLM.
-        
+
         Args:
             task_description: Initial task description (only used for first iteration)
             feedback: Feedback from previous actions
@@ -1222,7 +1222,7 @@ class BaseLLM(Controller):
         tools_description = ""
         if hasattr(self, 'is_qwen_vl_model') and self.is_qwen_vl_model and self.use_tools and self.tools:
             tools_description = format_tools_as_text(self.tools)
-        
+
         if task_description is not None:
             # Initial prompt - only used for first iteration
             if hasattr(self, 'is_qwen_vl_model') and self.is_qwen_vl_model:
@@ -1240,18 +1240,18 @@ class BaseLLM(Controller):
                 if self.client_type in ["unified", "shell"]:
                     return UNIFIED_FEEDBACK_PROMPT_TEMPLATE.format(feedback=feedback)
         raise ValueError("No task description or feedback provided")
-    
+
     def parse_tool_calls_list(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Parse a list of tool calls into action format.
-        
+
         Args:
             tool_calls: List of tool call dictionaries
-            
+
         Returns:
             Dictionary with actions list or single action
         """
         actions = []
-        
+
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_call_id = tool_call.get("id")
@@ -1265,7 +1265,7 @@ class BaseLLM(Controller):
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse tool arguments: {function.get('arguments')}")
                 arguments = {}
-            
+
             # Map tool call to action
             from nanorollout.envs.cocoa_env.tools import map_tool_call_to_action
             action = map_tool_call_to_action(tool_name, arguments)
@@ -1273,13 +1273,13 @@ class BaseLLM(Controller):
                 action["tool_call_id"] = tool_call_id
             actions.append(action)
             logger.debug(f"Tool call: {tool_name} -> Action: {action}")
-        
+
         # If only one action, return it directly; otherwise return list
         if len(actions) == 1:
             return actions[0]
         else:
             return {"actions": actions}
-    
+
     def parse_response(self, response: str) -> Dict[str, Any]:
         """Parse JSON from the LLM response."""
         # Check if response contains tool_call tags (Qwen format) - if so, try to parse as tool call first
@@ -1291,7 +1291,7 @@ class BaseLLM(Controller):
                     parsed_response = self.parse_tool_calls_list(tool_calls)
                     if parsed_response:
                         return parsed_response[0] if isinstance(parsed_response, list) else parsed_response
-        
+
         # Qwen models often prepend a `<think>...</think>` block; only parse content after it
         try:
             model_name = getattr(self, "model", "")
@@ -1307,7 +1307,7 @@ class BaseLLM(Controller):
                         response = response[open_idx + len("<think>"):]
         except Exception:
             pass
-        
+
         # Remove tool_call tags if present (in case they weren't parsed above)
         if "<tool_call>" in response or "</tool_call>" in response:
             # Try to extract JSON from tool_call tags
@@ -1316,7 +1316,7 @@ class BaseLLM(Controller):
             if match:
                 response = match.group(1)
                 logger.debug(f"Extracted JSON from tool_call tags: {response[:200]}...")
-        
+
         # Try to find JSON in markdown code block
         json_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", response, re.DOTALL)
         if json_match:
@@ -1325,7 +1325,7 @@ class BaseLLM(Controller):
             # Try to parse the entire response as JSON
             json_str = response.strip()
             logger.debug(f"No markdown code block found, attempting to parse raw response: {json_str}")
-        
+
         try:
             parsed = json.loads(json_str)
             logger.debug(f"Successfully parsed JSON response with keys: {list(parsed.keys())}")
@@ -1341,19 +1341,19 @@ class BaseLLM(Controller):
                 logger.error(f"Failed to parse JSON response: {e2}")
                 logger.error(f"Response content: {response[:200]}...")
                 raise ValueError(f"Invalid JSON in LLM response: {e2}")
-    
+
     def get_history(self) -> List[Dict[str, str]]:
         """Get the message history."""
         return self.messages
-    
+
     def clear_history(self) -> None:
         """Clear the message history."""
         logger.debug(f"Clearing message history ({len(self.messages)} messages removed)")
         self.messages = []
-    
+
     def get_cost_stats(self) -> Dict[str, Any]:
         """Get API cost and usage statistics.
-        
+
         Returns:
             Dictionary with cost and token usage information
         """
@@ -1376,7 +1376,7 @@ class BaseLLM(Controller):
             "model": self.model,
             "per_call_costs": self.per_call_costs,
         }
-    
+
     def reset_cost_tracking(self) -> None:
         """Reset cost tracking statistics."""
         logger.debug("Resetting cost tracking")
@@ -1398,18 +1398,18 @@ class BaseLLM(Controller):
         self.api_calls = 0
         self.per_call_costs = []
         self.last_think = None
-    
+
     def get_last_think(self) -> str | None:
         """Get the last think/reasoning content for visualization.
-        
+
         Returns:
             The last think content string, or None if not available
         """
         return self.last_think
-    
+
     def add_tool_message(self, tool_call_id: str, content: str) -> None:
         """Append tool call results to the conversation history.
-        
+
         Args:
             tool_call_id: ID of the tool call
             content: Result content from tool execution
@@ -1427,14 +1427,14 @@ class BaseLLM(Controller):
         }
         self.messages.append(tool_message)
         logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
-    
+
 
     def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Remove images from a message, keeping only text content.
-        
+
         Args:
             message: Message dictionary with 'role' and 'content' keys
-            
+
         Returns:
             Modified message dictionary with images removed
         """
@@ -1451,10 +1451,10 @@ class BaseLLM(Controller):
             else:
                 message["content"] = text_items
         return message
-    
+
     def _cleanup_old_user_message_images(self) -> None:
         """Remove images from old user messages, keeping only the most recent user message's images.
-        
+
         This prevents image accumulation across iterations. Only the current iteration's images
         should be included in the API call.
         """
@@ -1463,14 +1463,14 @@ class BaseLLM(Controller):
             # For non-Qwen models, check if we should cleanup images
             # This is a generic implementation that can be overridden
             pass
-        
+
         # Find the last user message (should be the one we just added)
         last_user_msg_idx = None
         for i in range(len(self.messages) - 1, -1, -1):
             if self.messages[i].get("role") == "user":
                 last_user_msg_idx = i
                 break
-        
+
         # Remove images from all user messages except the last one
         if last_user_msg_idx is not None:
             for i in range(len(self.messages)):
@@ -1492,7 +1492,7 @@ class OpenAILLM(BaseLLM):
     def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
         # Initialize base class first
         super().__init__(llm_config, client_type, **kwargs)
-        
+
         if llm_config is None:
             llm_config = {}
 
@@ -1547,18 +1547,18 @@ class OpenAILLM(BaseLLM):
         logger.debug(f"API key configured: {bool(api_key)}")
         logger.debug(f"Client type: {self.client_type}")
         logger.debug(f"Tool calling mode: {self.use_tools}")
-    
+
     def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
         """Prepare message content for OpenAI API."""
         # Handle backward compatibility: if single string is passed, convert to list
         if images_base64 is not None and isinstance(images_base64, str):
             images_base64 = [images_base64]
-        
+
         # Build message content based on whether we have images
         if images_base64 and len(images_base64) > 0:
             # Build content list with text and all images
             message_content = []
-            
+
             # OpenAI multimodal format: text first, then images
             message_content.append({
                 "type": "text",
@@ -1650,7 +1650,7 @@ class OpenAILLM(BaseLLM):
                 f"- {item.get('name') or '<unknown>'}: arguments={item.get('arguments')!r}; error={item.get('error')}"
             )
         return "\n".join(lines)
-    
+
     def _convert_tools_to_responses_api(self, openai_tools: list) -> list:
         """Convert Chat Completions tool definitions to Responses API format (flat, no 'function' wrapper)."""
         responses_tools = []
@@ -1745,7 +1745,7 @@ class OpenAILLM(BaseLLM):
             if self.use_tools and self.tools:
                 api_params["tools"] = self.tools
             return self.client.chat.completions.create(**api_params)
-    
+
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
         """Handle OpenAI API response."""
         if hasattr(response, "usage") and response.usage:
@@ -1798,7 +1798,7 @@ class OpenAILLM(BaseLLM):
         else:
             # Compatibility path for newer Responses API
             message = MockMessage()
-            
+
             # 1. Extract text content (support multiple possible field names)
             if hasattr(response, 'output_text'):
                 message.content = response.output_text
@@ -1813,30 +1813,30 @@ class OpenAILLM(BaseLLM):
             # 2. Extract tool calls (support both object and dict variants)
             raw_output = getattr(response, 'output', [])
             raw_tool_calls = getattr(response, 'tool_calls', [])
-            
+
             # Determine which field contains tool call entries
             items_to_check = raw_tool_calls if raw_tool_calls else (raw_output if isinstance(raw_output, list) else [])
-            
+
             extracted_tools = []
             for item in items_to_check:
                 # Support SDK returns as either dict or Pydantic-like object
                 is_dict = isinstance(item, dict)
                 item_type = item.get('type', '') if is_dict else getattr(item, 'type', '')
-                
+
                 # Check whether this item represents a tool/function call
                 if item_type in ['function', 'function_call'] or (is_dict and 'name' in item) or hasattr(item, 'name'):
                     f_name = item.get('name', '') if is_dict else getattr(item, 'name', '')
                     f_args = item.get('arguments', '{}') if is_dict else getattr(item, 'arguments', '{}')
-                    
+
                     # Use provided call ID, otherwise generate a unique mock ID
                     tc_id = item.get('call_id', item.get('id', f"call_{id(item)}")) if is_dict else getattr(item, 'call_id', getattr(item, 'id', f"call_{id(item)}"))
-                    
+
                     extracted_tools.append(MockToolCall(
-                        id=tc_id, 
-                        type="function", 
+                        id=tc_id,
+                        type="function",
                         function=MockFunction(name=f_name, arguments=f_args)
                     ))
-            
+
             if extracted_tools:
                 message.tool_calls = extracted_tools
 
@@ -1955,7 +1955,7 @@ class OpenAILLM(BaseLLM):
     def parse_tool_calls_list(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Parse a list of tool calls into action format."""
         actions = []
-        
+
         for tool_call in tool_calls:
             function = tool_call.get("function", {})
             tool_call_id = tool_call.get("id")
@@ -1969,7 +1969,7 @@ class OpenAILLM(BaseLLM):
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse tool arguments: {function.get('arguments')}")
                 arguments = {}
-            
+
             # Map tool call to action
             from nanorollout.envs.cocoa_env.tools import map_tool_call_to_action
             action = map_tool_call_to_action(tool_name, arguments)
@@ -1977,13 +1977,13 @@ class OpenAILLM(BaseLLM):
                 action["tool_call_id"] = tool_call_id
             actions.append(action)
             logger.debug(f"Tool call: {tool_name} -> Action: {action}")
-        
+
         # If only one action, return it directly; otherwise return list
         if len(actions) == 1:
             return actions[0]
         else:
             return {"actions": actions}
-    
+
     def parse_tool_calls(self, tool_calls) -> Dict[str, Any]:
         """Parse tool calls from OpenAI API response into action format."""
         # Convert OpenAI tool_calls to our internal format
@@ -1996,7 +1996,7 @@ class OpenAILLM(BaseLLM):
                     "arguments": tc.function.arguments
                 }
             })
-        
+
         return self.parse_tool_calls_list(tool_calls_list)
 
     def parse_response(self, response: str) -> Dict[str, Any]:
@@ -2050,7 +2050,7 @@ class OpenAILLM(BaseLLM):
         }
         self.messages.append(tool_message)
         logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
-    
+
     def _cleanup_old_user_message_images(self) -> None:
         """Remove images from old user messages, keeping only the most recent user image turn."""
         if not getattr(self, "cleanup_old_user_images", True):
@@ -2103,12 +2103,12 @@ class QwenLLM(OpenAILLM):
         # Handle backward compatibility: if single string is passed, convert to list
         if images_base64 is not None and isinstance(images_base64, str):
             images_base64 = [images_base64]
-        
+
         # Build message content based on whether we have images
         if images_base64 and len(images_base64) > 0:
             # Build content list with text and all images
             message_content = []
-            
+
             # Qwen3-VL format: images first, then text
             if self.is_qwen_vl_model:
                 for img_base64 in images_base64:
@@ -2136,7 +2136,7 @@ class QwenLLM(OpenAILLM):
                             "url": f"data:image/png;base64,{img_base64}"
                         }
                     })
-            
+
             logger.debug(f"Adding {len(images_base64)} image(s) to message")
             return message_content
         else:
@@ -2149,7 +2149,7 @@ class QwenLLM(OpenAILLM):
         tools_description = ""
         if self.is_qwen_vl_model and self.use_tools and self.tools:
             tools_description = format_tools_as_text(self.tools)
-        
+
         if task_description is not None:
             # Initial prompt - only used for first iteration
             if self.is_qwen_vl_model:
@@ -2168,7 +2168,7 @@ class QwenLLM(OpenAILLM):
             else:
                 if self.client_type == "unified":
                     return UNIFIED_FEEDBACK_PROMPT_TEMPLATE.format(feedback=feedback)
-        
+
         # Fallback to base implementation if no match
         return super().build_prompt(task_description, feedback, conversation_history)
 
@@ -2183,11 +2183,11 @@ class QwenLLM(OpenAILLM):
 
         if self.temperature is not None:
             api_params["temperature"] = self.temperature
-        
+
         # Add tools if in tool calling mode (except for Qwen3-VL text-based tool calls)
         if self.use_tools and self.tools and not self.is_qwen_vl_model:
             api_params["tools"] = self.tools
-        
+
         return self.client.chat.completions.create(**api_params)
 
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
@@ -2211,9 +2211,9 @@ class QwenLLM(OpenAILLM):
 
         message = response.choices[0].message
         assistant_message = message.content if message.content else ""
-        
+
         has_tool_call_pattern = ("<tool_call>" in assistant_message or "</tool_call>" in assistant_message)
-        
+
         if self.use_tools and assistant_message and has_tool_call_pattern:
             tool_calls = self.parse_text_tool_calls(assistant_message)
             if tool_calls:
@@ -2222,11 +2222,11 @@ class QwenLLM(OpenAILLM):
                     self.last_think = think_part if think_part else None
                 else:
                     self.last_think = assistant_message
-                
+
                 self.messages.append({"role": "assistant", "content": assistant_message})
-                
+
                 logger.debug(f"Parsed {len(tool_calls)} tool calls from Qwen model")
-                
+
                 try:
                     parsed_response = self.parse_tool_calls_list(tool_calls)
                     logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
@@ -2242,17 +2242,17 @@ class QwenLLM(OpenAILLM):
                     error_message = f"Error parsing tool calls: {str(parse_error)}\nPlease check the tool parameters."
                     self.messages.append({"role": "user", "content": error_message})
                     return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
-        
+
         return super()._handle_api_response(response, attempt, max_attempts)
 
     def parse_text_tool_calls(self, content: str) -> List[Dict[str, Any]]:
         """Parse Qwen model text-based tool calls."""
         tool_calls = []
-        
+
         # First, try to find complete tool_call blocks
         pattern = r'<tool_call>\s*({.*?})\s*</tool_call>'
         matches = re.findall(pattern, content, re.DOTALL)
-        
+
         # If no complete blocks found, try to find JSON before </tool_call> tag
         if not matches:
             pattern2 = r'({[^{}]*"name"[^{}]*})\s*</tool_call>'
@@ -2267,7 +2267,7 @@ class QwenLLM(OpenAILLM):
                         if "</tool_call>" in remaining:
                             matches.append(potential)
                             break
-        
+
         for match in matches:
             try:
                 tool_call_data = json.loads(match)
@@ -2278,14 +2278,14 @@ class QwenLLM(OpenAILLM):
                 except (json.JSONDecodeError, Exception) as e:
                     logger.error(f"Failed to parse Qwen tool call: {e}")
                     continue
-            
+
             tool_calls.append({
                 "function": {
                     "name": tool_call_data.get("name"),
                     "arguments": json.dumps(tool_call_data.get("arguments", {}))
                 }
             })
-        
+
         return tool_calls
 
     def _fix_json_control_chars(self, json_str: str) -> str:
@@ -2294,7 +2294,7 @@ class QwenLLM(OpenAILLM):
         i = 0
         in_string = False
         escape_next = False
-        
+
         while i < len(json_str):
             char = json_str[i]
             if escape_next:
@@ -2334,14 +2334,14 @@ class QwenLLM(OpenAILLM):
                     response = response[open_idx + len("<think>"):]
         except Exception:
             pass
-        
+
         # Remove tool_call tags if present (in case they weren't parsed above)
         if "<tool_call>" in response or "</tool_call>" in response:
             pattern = r'<tool_call>\s*({.*?})\s*</tool_call>'
             match = re.search(pattern, response, re.DOTALL)
             if match:
                 response = match.group(1)
-        
+
         return super().parse_response(response)
 
     def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
@@ -2370,7 +2370,7 @@ class QwenLLM(OpenAILLM):
             if self.messages[i].get("role") == "user":
                 last_user_msg_idx = i
                 break
-        
+
         if last_user_msg_idx is not None:
             for i in range(len(self.messages)):
                 if i != last_user_msg_idx and self.messages[i].get("role") == "user":
@@ -2474,10 +2474,10 @@ class ClaudeLLM(BaseLLM):
     def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic libraries not available. Install with: pip install anthropic")
-        
+
         # Initialize base class first
         super().__init__(llm_config, client_type, **kwargs)
-        
+
         if llm_config is None:
             llm_config = {}
 
@@ -2488,7 +2488,7 @@ class ClaudeLLM(BaseLLM):
             kwargs.get("api_key") or
             os.getenv("ANTHROPIC_API_KEY")
         )
-        
+
         if not api_key:
             raise ValueError("Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable, or provide in config.")
 
@@ -2498,11 +2498,11 @@ class ClaudeLLM(BaseLLM):
             kwargs.get("base_url") or
             os.getenv("ANTHROPIC_BASE_URL")
         )
-        
+
         client_kwargs = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url
-            
+
         self.client = anthropic.Anthropic(**client_kwargs)
 
         # Set cleanup_old_user_images=false in controller.args to keep all past
@@ -2539,10 +2539,10 @@ class ClaudeLLM(BaseLLM):
         # Handle backward compatibility
         if images_base64 is not None and isinstance(images_base64, str):
             images_base64 = [images_base64]
-        
+
         if images_base64 and len(images_base64) > 0:
             message_content = []
-            
+
             # Add images first (or text first? Claude documentation says text/image order doesn't matter much but usually alternating)
             # The user example has image first then text.
             for img_base64 in images_base64:
@@ -2555,13 +2555,13 @@ class ClaudeLLM(BaseLLM):
                         "data": img_base64,
                     }
                 })
-            
+
             # Add text
             message_content.append({
                 "type": "text",
                 "text": prompt
             })
-            
+
             logger.debug(f"Adding {len(images_base64)} image(s) to message")
             return message_content
         else:
@@ -2584,7 +2584,7 @@ class ClaudeLLM(BaseLLM):
             api_params["output_config"] = {"effort": "high"}
 
         return self.client.messages.create(**api_params)
-    
+
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
         """Handle Claude API response."""
         if hasattr(response, "usage") and response.usage:
@@ -2626,16 +2626,16 @@ class ClaudeLLM(BaseLLM):
         content_blocks = response.content
         text_content = ""
         tool_use_blocks = []
-        
+
         for block in content_blocks:
             if block.type == "text":
                 text_content += block.text
             elif block.type == "tool_use":
                 tool_use_blocks.append(block)
-        
+
         # Save think content
         self.last_think = text_content if text_content else None
-        
+
         # Add assistant message to history
         # Claude expects the exact content blocks in history for assistant
         # We need to reconstruct the content list
@@ -2650,7 +2650,7 @@ class ClaudeLLM(BaseLLM):
                     "name": block.name,
                     "input": block.input
                 })
-        
+
         self.messages.append({
             "role": "assistant",
             "content": assistant_content
@@ -2667,9 +2667,9 @@ class ClaudeLLM(BaseLLM):
                         "arguments": tool_use.input # Already a dict
                     }
                 })
-            
+
             logger.debug(f"Received {len(tool_calls_list)} tool calls from {self.model}")
-            
+
             try:
                 parsed_response = self.parse_tool_calls_list(tool_calls_list)
                 logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
@@ -2682,13 +2682,13 @@ class ClaudeLLM(BaseLLM):
                         "error_message": str(parse_error),
                         "tool_calls": tool_calls_list
                     }
-                
+
                 # Add error message
                 self.messages.append({
                     "role": "user",
                     "content": [
                         {
-                            "type": "text", 
+                            "type": "text",
                             "text": f"Error parsing tool calls: {str(parse_error)}"
                         }
                     ]
@@ -2697,7 +2697,7 @@ class ClaudeLLM(BaseLLM):
         else:
             # Regular text response
             logger.debug(f"Received response from {self.model} (length: {len(text_content)} chars)")
-            
+
             try:
                 parsed_response = self.parse_response(text_content)
                 logger.debug(f"Parsed response (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
@@ -2706,7 +2706,7 @@ class ClaudeLLM(BaseLLM):
                 logger.warning(f"Failed to parse assistant response: {parse_error}")
                 if attempt >= max_attempts:
                     raise
-                
+
                 correction_prompt = (
                     "Your previous response did not follow the required format. "
                     "Always respond with either (a) a tool call, or (b) a JSON object describing the next action."
@@ -2725,7 +2725,7 @@ class ClaudeLLM(BaseLLM):
             content = ""
         if not isinstance(content, str):
             content = str(content)
-            
+
         tool_message = {
             "role": "user",
             "content": [
@@ -2780,13 +2780,13 @@ class ClaudeLLM(BaseLLM):
         for msg in self.messages:
             new_msg = msg.copy()
             content = msg.get("content")
-            
+
             if isinstance(content, list):
                 # Handle list content (Claude format)
                 text_parts = []
                 tool_calls = []
                 has_only_tool_results = True
-                
+
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
@@ -2803,14 +2803,14 @@ class ClaudeLLM(BaseLLM):
                                 }
                             })
                             has_only_tool_results = False
-                
+
                 if has_only_tool_results:
                     continue
 
                 new_msg["content"] = "".join(text_parts)
                 if tool_calls:
                     new_msg["tool_calls"] = tool_calls
-            
+
             history.append(new_msg)
         return history
 
@@ -2821,10 +2821,10 @@ class GeminiLLM(BaseLLM):
     def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
         if not GEMINI_AVAILABLE:
             raise ImportError("Google Gemini libraries not available. Install with: pip install google-genai")
-        
+
         # Initialize base class first
         super().__init__(llm_config, client_type, **kwargs)
-        
+
         if llm_config is None:
             llm_config = {}
 
@@ -2836,7 +2836,7 @@ class GeminiLLM(BaseLLM):
             os.getenv("GEMINI_API_KEY") or
             os.getenv("GOOGLE_API_KEY")
         )
-        
+
         if not api_key:
             raise ValueError("Gemini API key not found. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable, or provide in config.")
 
@@ -2868,16 +2868,16 @@ class GeminiLLM(BaseLLM):
         """Sanitize parameters for Gemini API (e.g. remove non-string enums)."""
         if not parameters:
             return parameters
-            
+
         new_params = parameters.copy()
-        
+
         # Handle properties if present
         if "properties" in new_params:
             new_props = {}
             for name, prop in new_params["properties"].items():
                 new_props[name] = self._sanitize_gemini_parameters(prop)
             new_params["properties"] = new_props
-            
+
         # Handle enum validation
         if "enum" in new_params:
             # Check if any enum value is not a string
@@ -2891,15 +2891,15 @@ class GeminiLLM(BaseLLM):
                 else:
                     new_params["description"] = f"Options: {options_str}"
                 del new_params["enum"]
-                
+
         return new_params
 
     def _convert_openai_tools_to_gemini(self, openai_tools: List[Dict[str, Any]]) -> List[types.Tool]:
         """Convert OpenAI tool format to Gemini tool format.
-        
+
         Args:
             openai_tools: List of tools in OpenAI format
-            
+
         Returns:
             List of Gemini Tool objects
         """
@@ -2907,11 +2907,11 @@ class GeminiLLM(BaseLLM):
         for tool in openai_tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
-                
+
                 # Sanitize parameters
                 parameters = func.get("parameters", {})
                 sanitized_parameters = self._sanitize_gemini_parameters(parameters)
-                
+
                 gemini_function = {
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
@@ -2922,36 +2922,36 @@ class GeminiLLM(BaseLLM):
 
     def _convert_openai_messages_to_gemini_contents(self, messages: List[Dict[str, Any]]) -> List[types.Content]:
         """Convert OpenAI message format to Gemini contents format.
-        
+
         Args:
             messages: List of messages in OpenAI format
-            
+
         Returns:
             List of Gemini Content objects
         """
         contents = []
         current_role = None
         current_parts = []
-        
+
         for message in messages:
             role = message.get("role")
             content = message.get("content", "")
-            
+
             # Handle tool messages (skip for now, Gemini handles tool results differently)
             if role == "tool":
                 continue
-            
+
             # Handle assistant messages with tool_calls
             if role == "assistant" and "tool_calls" in message:
                 # For assistant messages with tool calls, we need to add the function call parts
                 if current_parts:
                     contents.append(types.Content(role=current_role, parts=current_parts))
                     current_parts = []
-                
+
                 # Add text content if present
                 if content:
                     current_parts.append(types.Part(text=content))
-                
+
                 # Add function call parts
                 for tool_call in message.get("tool_calls", []):
                     func = tool_call.get("function", {})
@@ -2959,29 +2959,29 @@ class GeminiLLM(BaseLLM):
                         args = json.loads(func.get("arguments", "{}"))
                     except json.JSONDecodeError:
                         args = {}
-                    
+
                     current_parts.append(types.Part(
                         function_call=types.FunctionCall(
                             name=func.get("name", ""),
                             args=args
                         )
                     ))
-                
+
                 if current_parts:
                     contents.append(types.Content(role="model", parts=current_parts))
                     current_parts = []
                 continue
-            
+
             # Map OpenAI roles to Gemini roles
             gemini_role = "user" if role == "user" else "model"
-            
+
             # If role changed, save previous content
             if current_role is not None and current_role != gemini_role and current_parts:
                 contents.append(types.Content(role=current_role, parts=current_parts))
                 current_parts = []
-            
+
             current_role = gemini_role
-            
+
             # Handle content (can be string or list for multimodal)
             if isinstance(content, str):
                 if content:
@@ -3007,7 +3007,7 @@ class GeminiLLM(BaseLLM):
                                             mime_type = "image/gif"
                                         elif "image/webp" in image_url:
                                             mime_type = "image/webp"
-                                        
+
                                         current_parts.append(types.Part(
                                             inline_data=types.Blob(
                                                 mime_type=mime_type,
@@ -3016,24 +3016,24 @@ class GeminiLLM(BaseLLM):
                                         ))
                                     except Exception as e:
                                         logger.warning(f"Failed to decode image: {e}")
-        
+
         # Add remaining content
         if current_parts:
             contents.append(types.Content(role=current_role, parts=current_parts))
-        
+
         return contents
 
     def _make_api_call(self) -> Any:
         """Make Gemini API call."""
         # Convert messages to Gemini contents format
         contents = self._convert_openai_messages_to_gemini_contents(self.messages)
-        
+
         # Prepare API call parameters
         api_params = {
             "model": self.model,
             "contents": contents
         }
-        
+
         # Build GenerateContentConfig
         config_kwargs = {}
 
@@ -3053,13 +3053,13 @@ class GeminiLLM(BaseLLM):
         response = self.client.models.generate_content(**api_params)
         self.api_calls += 1
         return response
-    
+
     def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
         """Handle Gemini API response."""
         # Extract response content
         if not response.candidates:
             raise ValueError("No candidates in Gemini response")
-        
+
         candidate = response.candidates[0]
         if not candidate.content or not candidate.content.parts:
             raise ValueError("No content parts in Gemini response")
@@ -3086,7 +3086,7 @@ class GeminiLLM(BaseLLM):
                 f"in={tokens['prompt_token_count']} cached={tokens['cached_content_token_count']} "
                 f"out={tokens['candidates_token_count']} | Running total: ${self.total_cost:.6f}"
             )
-        
+
         # Check for function calls
         function_calls = []
         text_content = ""
@@ -3110,7 +3110,7 @@ class GeminiLLM(BaseLLM):
                         func_args_str = str(func_args)
                 else:
                     func_args_str = "{}"
-                
+
                 function_calls.append({
                     "id": f"call_{len(function_calls)}",
                     "function": {
@@ -3120,10 +3120,10 @@ class GeminiLLM(BaseLLM):
                 })
             elif hasattr(part, 'text') and part.text:
                 text_content += part.text
-        
+
         # Save think content for visualization
         self.last_think = think_content if think_content else (text_content if text_content else None)
-        
+
         # Handle tool calling response
         if function_calls:
             # Convert to OpenAI-style tool_calls format for parsing
@@ -3136,13 +3136,13 @@ class GeminiLLM(BaseLLM):
                         "arguments": fc["function"]["arguments"]
                     }
                 })
-            
+
             # Add assistant message with tool calls
             assistant_message = {"role": "assistant", "content": text_content, "tool_calls": tool_calls_list}
             self.messages.append(assistant_message)
-            
+
             logger.debug(f"Received {len(function_calls)} function calls from {self.model}")
-            
+
             try:
                 parsed_response = self.parse_tool_calls(tool_calls_list)
                 logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
@@ -3198,13 +3198,13 @@ class GeminiLLM(BaseLLM):
                 })
                 # Retry by making another API call
                 return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
-    
+
     def parse_tool_calls(self, tool_calls) -> Dict[str, Any]:
         """Parse tool calls from Gemini API response into action format.
-        
+
         Args:
             tool_calls: List of tool calls from Gemini API
-            
+
         Returns:
             Dictionary with actions list or single action
         """
@@ -3218,7 +3218,7 @@ class GeminiLLM(BaseLLM):
                     "arguments": tc["function"]["arguments"]
                 }
             })
-        
+
         return self.parse_tool_calls_list(tool_calls_list)
 
     def get_history(self) -> List[Dict[str, str]]:
@@ -3238,7 +3238,7 @@ class GeminiLLM(BaseLLM):
             content = ""
         if not isinstance(content, str):
             content = str(content)
-        
+
         # For Gemini, we need to add function response as a part
         # Find the corresponding function call and add result
         # This is a simplified implementation - Gemini may handle this differently
@@ -3251,10 +3251,10 @@ class GeminiLLM(BaseLLM):
 
     def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Remove images from a message, keeping only text content.
-        
+
         Args:
             message: Message dictionary with 'role' and 'content' keys
-            
+
         Returns:
             Modified message dictionary with images removed
         """
@@ -3274,7 +3274,7 @@ class GeminiLLM(BaseLLM):
 
     def _cleanup_old_user_message_images(self) -> None:
         """Remove images from old user messages, keeping only the most recent user message's images.
-        
+
         This prevents image accumulation across iterations. Only the current iteration's images
         should be included in the API call.
         """
@@ -3288,7 +3288,7 @@ class GeminiLLM(BaseLLM):
             if self.messages[i].get("role") == "user":
                 last_user_msg_idx = i
                 break
-        
+
         # Remove images from all user messages except the last one
         if last_user_msg_idx is not None:
             for i in range(len(self.messages)):

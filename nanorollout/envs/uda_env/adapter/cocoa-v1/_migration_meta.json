@@ -1,0 +1,15 @@
+{
+  "migrator_version": "1",
+  "migrated_at_utc": "2026-05-16T08:07:21+00:00",
+  "base_image": "ghcr.io/bowenbryanwang/uda-desktop:0.6.0",
+  "src_path_relative": "../cocoa-agent/cocoabench-v1.0",
+  "task_count": 153,
+  "tasks_with_assets": 0,
+  "tasks_with_path_rewrites": 3,
+  "total_path_rewrites": 9,
+  "non_standard_from_count": 0,
+  "warnings": [],
+  "source_remote": "https://github.com/cocoabench/cocoa-agent.git",
+  "source_sha": "0142190e72d633493db801220a76082c4eac6dbc",
+  "source_root": "/Users/saltyp0rridge/Projects/UDA-Gym/cocoa-agent"
+}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from nanorollout.envs.shell_env.base import ShellEnvironment
@@ -79,8 +79,7 @@ class QwenCode(InstalledAgentBase):
                 servers[server.name] = {"url": server.url}
         config = json.dumps({"mcpServers": servers}, indent=2)
         return (
-            "mkdir -p ~/.qwen && "
-            f"cat > ~/.qwen/settings.json <<'EOF'\n{config}\nEOF"
+            "mkdir -p ~/.qwen && " f"cat > ~/.qwen/settings.json <<'EOF'\n{config}\nEOF"
         )
 
     def invoke(
@@ -157,7 +156,9 @@ class QwenCode(InstalledAgentBase):
         return events
 
     @staticmethod
-    def _make_tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _make_tool_call(
+        call_id: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             "tool_call_id": call_id,
             "function_name": name,
@@ -212,7 +213,9 @@ class QwenCode(InstalledAgentBase):
 
             if event_type == "user":
                 parts = message.get("parts", [])
-                text = "\n".join(part.get("text", "") for part in parts if part.get("text"))
+                text = "\n".join(
+                    part.get("text", "") for part in parts if part.get("text")
+                )
                 if not text:
                     continue
                 steps.append(
@@ -293,7 +296,9 @@ class QwenCode(InstalledAgentBase):
                                 "source_call_id": call_id,
                                 "content": str(output),
                             }
-                            observation = step.setdefault("observation", {"results": []})
+                            observation = step.setdefault(
+                                "observation", {"results": []}
+                            )
                             observation["results"].append(result)
                             break
 

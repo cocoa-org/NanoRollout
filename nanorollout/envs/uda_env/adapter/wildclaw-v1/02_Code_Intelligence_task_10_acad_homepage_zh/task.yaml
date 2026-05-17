@@ -1,0 +1,22 @@
+instruction: |
+  任务：参考附图 `/tmp_workspace/ref_template_screenshot.png` 中的主页模板风格，为作者 Shuangrui Ding（丁双睿）制作一个新的学术个人主页。（注意：时间有限，尽量15分钟内完成，请注意高效）
+
+  【具体要求】
+  1. 不需要部署到 GitHub，只需在本地生成可用的静态网页
+  2. 论文展示部分只放他以共一或者一作身份中稿2025年的ICCV或者CVPR的文章，不用展示其他会议的论文
+  3. News 部分只要展示 25 年 10 月份之前的部分即可，之后的不用展示
+  4. 个人信息可参考作者现有主页截图 `/tmp_workspace/ref_author_homepage_screenshot.png` 上的介绍
+  5. 所有代码和资源文件放在 `/tmp_workspace/results` 目录下
+  6. 使用 Playwright + Headless Chromium 将最终网页首页完整截图，保存为 `/tmp_workspace/results/screenshot.png`
+
+  【提示和注意事项】
+  1. 模板参考：`/tmp_workspace/ref_template_screenshot.png` 展示了 AcadHomepage 风格的学术主页，可以直接基于 AcadHomepage 仓库修改，也可以自行搭建同风格页面
+  2. https://rayeren.github.io/和https://mark12ding.github.io/是这两个截图的原链接，但是不保证内容与这两张截图一致（可能网页有更新等），你需要以两个截图的内容为准，如果原链接有你可以用的东西，你可以考虑使用，仅供参考
+  3. 当前 Python 环境已预装 playwright 和 chromium，可直接使用
+  4. 截图需包含完整首页内容
+
+  【输出要求】
+  - `/tmp_workspace/results/` 目录下包含完整的静态网页源码
+  - `/tmp_workspace/results/screenshot.png` 为最终主页首页的完整截图
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

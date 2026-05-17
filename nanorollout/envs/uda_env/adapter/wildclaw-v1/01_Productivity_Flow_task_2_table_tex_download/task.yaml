@@ -1,0 +1,19 @@
+instruction: |
+  I want to recover original LaTeX table source from an arXiv paper.
+
+  Please work on this paper:
+
+  - Paper URL: `https://arxiv.org/abs/2501.07888`
+
+  Your task is to find the corresponding original arXiv source package, download it, and extract **all table environments from the paper source**. You should delete the source package after extracting.
+
+  Save the results into `/tmp_workspace/results`.
+
+  - Save each recovered table as a separate file named `1.tex`, `2.tex`, `3.tex`, ...
+  - Number the files in the order the tables appear in the paper
+  - Each file must contain exactly one original LaTeX `table` environment copied from the source package
+  - Preserve the original table content and formatting as much as possible
+  - Do not merge multiple tables into one file
+  - Do not wrap the table with extra explanation, markdown, or prose
+  - Do not skip numbers in the sequence
+  - Only generate the required output files

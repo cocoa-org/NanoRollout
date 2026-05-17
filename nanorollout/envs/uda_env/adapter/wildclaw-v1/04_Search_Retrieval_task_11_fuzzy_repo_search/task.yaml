@@ -1,0 +1,11 @@
+instruction: |
+  Help me find that open-source project from 2023–2024 that made it possible to run large language models on ordinary laptops and desktops without requiring a dedicated GPU. I only vaguely remember a few things about it:
+
+  - The project was implemented in a low-level systems programming language (C or C++) for maximum performance, with minimal external dependencies.
+  - The repository name referenced an animal commonly associated with South America.
+  - The original creator was also well-known in the community for building a similar lightweight inference tool for a popular open-source speech recognition model.
+  - The project pioneered a custom quantization file format that became widely adopted by the community.
+
+  The GitHub repository should have more than 60k stars.
+
+  Save the results into `/tmp_workspace/results/results.md`.

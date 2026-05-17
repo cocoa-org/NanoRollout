@@ -129,7 +129,7 @@ class BaseAgent(ABC):
     def get_tools_schema(self) -> list[dict[str, Any]]:
         """Get the OpenAI-compatible tool schemas for all tools."""
         return [tool.to_openai_schema() for tool in self.tools]
-    
+
     def _call_llm(self) -> dict[str, Any]:
         """Make a completion call to the LLM."""
         kwargs = {
@@ -177,7 +177,7 @@ class BaseAgent(ABC):
             logger.error(f"Error getting LLM response: {e}")
             return None
         return response
-    
+
     def _record_llm_metrics(self, response: Any) -> None:
         usage = getattr(response, "usage", None)
         usage_dict = None
@@ -237,7 +237,7 @@ class BaseAgent(ABC):
                         "role": "user",
                         "content": self._get_continuation_prompt(),
                     })
-            
+
             if self.finished:
                 self.exit_status = EXIT_STATUS_FINISHED
             elif iterations == self.config.max_iterations:

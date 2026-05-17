@@ -21,7 +21,7 @@ class VirtualBoxProvider(Provider):
         if result.returncode != 0:
             raise Exception("\033[91m" + result.stdout + result.stderr + "\033[0m")
         return result.stdout.strip()
-    
+
     @staticmethod
     def _get_vm_uuid(path_to_vm: str):
         try:
@@ -32,7 +32,7 @@ class VirtualBoxProvider(Provider):
                 # Load and parse the XML content from the file
                 tree = ET.parse(path_to_vm)
                 root = tree.getroot()
-                
+
                 # Find the <Machine> element and retrieve its 'uuid' attribute
                 machine_element = root.find('.//{http://www.virtualbox.org/}Machine')
                 if machine_element is not None:
@@ -53,7 +53,7 @@ class VirtualBoxProvider(Provider):
                 raise
         except subprocess.CalledProcessError as e:
                 logger.error(f"Error executing command: {e.output.decode().strip()}")
-            
+
 
     def start_emulator(self, path_to_vm: str, headless: bool, os_type: str = None, *args, **kwargs):
         # Note: os_type parameter is ignored for VirtualBox provider

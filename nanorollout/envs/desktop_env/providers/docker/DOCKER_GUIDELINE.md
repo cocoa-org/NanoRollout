@@ -22,7 +22,7 @@ If your hosting platform supports graphical user interface (GUI), you may refer 
 
 ## Running Experiments
 
-Add the following arguments when initializing `DesktopEnv`: 
+Add the following arguments when initializing `DesktopEnv`:
 - `provider_name`: `docker`
 - `os_type`: `Ubuntu` or `Windows`, depending on the OS of the VM
 

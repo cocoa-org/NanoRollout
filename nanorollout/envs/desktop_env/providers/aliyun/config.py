@@ -27,5 +27,3 @@ def compute_ttl_seconds(ttl_minutes: int) -> int:
         return max(0, int(ttl_minutes) * 60)
     except Exception:
         return 0
-
-

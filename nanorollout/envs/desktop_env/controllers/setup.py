@@ -66,7 +66,7 @@ class SetupController:
                     "parameters": dict like {str, Any} providing the keyword
                       parameters
                 }
-        """  
+        """
         self.use_proxy = use_proxy
         # make sure connection can be established
         logger.info(f"try to connect {self.http_server}")
@@ -79,10 +79,10 @@ class SetupController:
                 time.sleep(5)
                 retry += 1
                 logger.info(f"retry: {retry}/{MAX_RETRIES}")
-            
+
             if retry == MAX_RETRIES:
                 return False
-                
+
 
         for i, cfg in enumerate(config):
             config_type: str = cfg["type"]
@@ -92,7 +92,7 @@ class SetupController:
             # protocol
             setup_function: str = "_{:}_setup".format(config_type)
             assert hasattr(self, setup_function), f'Setup controller cannot find init function {setup_function}'
-            
+
             try:
                 logger.info(f"Executing setup step {i+1}/{len(config)}: {setup_function}")
                 logger.debug(f"Setup parameters: {parameters}")
@@ -103,7 +103,7 @@ class SetupController:
                 logger.error(f"Error details: {e}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 raise Exception(f"Setup step {i+1} failed: {setup_function} - {e}") from e
-        
+
         return True
 
     def _download_setup(self, files: List[Dict[str, str]]):
@@ -134,7 +134,7 @@ class SetupController:
                         logger.info(f"Download attempt {i+1}/{max_retries} for {url}")
                         response = requests.get(url, stream=True, timeout=300)  # Add 5 minute timeout
                         response.raise_for_status()
-                        
+
                         # Get file size if available
                         total_size = int(response.headers.get('content-length', 0))
                         if total_size > 0:
@@ -149,7 +149,7 @@ class SetupController:
                                     if total_size > 0 and downloaded_size % (1024*1024) == 0:  # Log every MB
                                         progress = (downloaded_size / total_size) * 100
                                         logger.info(f"Download progress: {progress:.1f}%")
-                        
+
                         logger.info(f"File downloaded successfully to {cache_path} ({downloaded_size / (1024*1024):.2f} MB)")
                         downloaded = True
                         break
@@ -305,7 +305,7 @@ class SetupController:
         if not shell and isinstance(command, str) and len(command.split()) > 1:
             logger.warning("Command should be a list of strings. Now it is a string. Will split it by space.")
             command = command.split()
-            
+
         if command[0] == "google-chrome" and self.use_proxy:
             command.append("--proxy-server=http://127.0.0.1:18888")  # Use the proxy server set up by _proxy_setup
 
@@ -410,7 +410,7 @@ class SetupController:
             shell: bool = False
     ):
         """Execute command with verification of results
-        
+
         Args:
             command: Command to execute
             verification: Dict with verification criteria:
@@ -424,9 +424,9 @@ class SetupController:
             raise Exception("Empty command to launch.")
 
         verification = verification or {}
-        
+
         payload = json.dumps({
-            "command": command, 
+            "command": command,
             "shell": shell,
             "verification": verification,
             "max_wait_time": max_wait_time,
@@ -435,7 +435,7 @@ class SetupController:
         headers = {"Content-Type": "application/json"}
 
         try:
-            response = requests.post(self.http_server + "/setup" + "/execute_with_verification", 
+            response = requests.post(self.http_server + "/setup" + "/execute_with_verification",
                                    headers=headers, data=payload, timeout=max_wait_time + 10)
             if response.status_code == 200:
                 result = response.json()
@@ -511,7 +511,7 @@ class SetupController:
 
     def _proxy_setup(self, client_password: str = ""):
         """Setup system-wide proxy configuration using proxy pool
-        
+
         Args:
             client_password (str): Password for sudo operations, defaults to "password"
         """
@@ -524,30 +524,30 @@ class SetupController:
                 time.sleep(5)
                 retry += 1
                 logger.info(f"retry: {retry}/{MAX_RETRIES}")
-            
+
             if retry == MAX_RETRIES:
                 return False
-            
+
         # Get proxy from global proxy pool
         proxy_pool = get_global_proxy_pool()
         current_proxy = proxy_pool.get_next_proxy()
-        
+
         if not current_proxy:
             logger.error("No proxy available from proxy pool")
             raise Exception("No proxy available from proxy pool")
-        
+
         # Format proxy URL
         proxy_url = proxy_pool._format_proxy_url(current_proxy)
         logger.info(f"Setting up proxy: {current_proxy.host}:{current_proxy.port}")
-        
-        # Configure system proxy environment variables  
+
+        # Configure system proxy environment variables
         proxy_commands = [
             f"echo '{client_password}' | sudo -S bash -c \"apt-get update\"", ## TODO: remove this line if ami is already updated
             f"echo '{client_password}' | sudo -S bash -c \"apt-get install -y tinyproxy\"", ## TODO: remove this line if tinyproxy is already installed
             f"echo '{client_password}' | sudo -S bash -c \"echo 'Port 18888' > /tmp/tinyproxy.conf\"",
             f"echo '{client_password}' | sudo -S bash -c \"echo 'Allow 127.0.0.1' >> /tmp/tinyproxy.conf\"",
             f"echo '{client_password}' | sudo -S bash -c \"echo 'Upstream http {current_proxy.username}:{current_proxy.password}@{current_proxy.host}:{current_proxy.port}' >> /tmp/tinyproxy.conf\"",
-            
+
             # CML commands to set environment variables for proxy
             f"echo 'export http_proxy={proxy_url}' >> ~/.bashrc",
             f"echo 'export https_proxy={proxy_url}' >> ~/.bashrc",
@@ -563,9 +563,9 @@ class SetupController:
                 logger.error(f"Failed to execute proxy setup command: {e}")
                 proxy_pool.mark_proxy_failed(current_proxy)
                 raise
-        
+
         self._launch_setup(["tinyproxy -c /tmp/tinyproxy.conf -d"], shell=True)
-        
+
         # Reload environment variables
         reload_cmd = "source /etc/environment"
         try:

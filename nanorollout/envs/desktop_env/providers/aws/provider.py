@@ -67,7 +67,7 @@ class AWSProvider(Provider):
                 for instance in reservation['Instances']:
                     private_ip_address = instance.get('PrivateIpAddress', '')
                     public_ip_address = instance.get('PublicIpAddress', '')
-                    
+
                     if public_ip_address:
                         vnc_url = f"http://{public_ip_address}:5910/vnc.html"
                         logger.info("="*80)
@@ -79,7 +79,7 @@ class AWSProvider(Provider):
                         print(f"📍 Please open the above address in the browser for remote desktop access\n")
                     else:
                         logger.warning("No public IP address available for VNC access")
-                    
+
                     # Patched for off-VPC host (tinyflow on slurm/GPU node):
                     # use public IP so remote host can reach worker ports 5000/8006/9222.
                     return public_ip_address or private_ip_address
@@ -140,7 +140,7 @@ class AWSProvider(Provider):
             instance_type = instance.get('InstanceType') or os.getenv('AWS_INSTANCE_TYPE') or 't3.large'
             if instance.get('InstanceType') is None:
                 logger.info(f"InstanceType missing on instance; using '{instance_type}' from env/default")
-            
+
             # Step 2: Terminate the old instance (skip if already terminated/shutting-down)
             state = (instance.get('State') or {}).get('Name')
             if state in ['shutting-down', 'terminated']:
@@ -158,7 +158,7 @@ class AWSProvider(Provider):
 
             # Step 3: Launch a new instance from the snapshot(AMI) with performance optimization
             logger.info(f"Launching a new instance from AMI {snapshot_name}...")
-            
+
             # TTL configuration follows the same env flags as allocation (centralized)
             enable_ttl = ENABLE_TTL
             default_ttl_minutes = DEFAULT_TTL_MINUTES
@@ -181,7 +181,7 @@ class AWSProvider(Provider):
                 ],
                 "BlockDeviceMappings": [
                     {
-                        "DeviceName": "/dev/sda1", 
+                        "DeviceName": "/dev/sda1",
                         "Ebs": {
                             # "VolumeInitializationRate": 300
                             "VolumeSize": 30,  # Size in GB
@@ -192,7 +192,7 @@ class AWSProvider(Provider):
                     }
                 ]
             }
-            
+
             new_instance = ec2_client.run_instances(**run_instances_params)
             new_instance_id = new_instance['Instances'][0]['InstanceId']
             logger.info(f"New instance {new_instance_id} launched from AMI {snapshot_name}.")

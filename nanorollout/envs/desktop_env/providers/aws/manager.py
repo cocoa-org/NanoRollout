@@ -52,7 +52,7 @@ IMAGE_ID_MAP = {
 
 
 def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
-    
+
     if region not in IMAGE_ID_MAP:
         raise ValueError(f"Region {region} is not supported. Supported regions are: {list(IMAGE_ID_MAP.keys())}")
     if screen_size not in IMAGE_ID_MAP[region]:
@@ -63,7 +63,7 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
     instance_id = None
     original_sigint_handler = signal.getsignal(signal.SIGINT)
     original_sigterm_handler = signal.getsignal(signal.SIGTERM)
-    
+
     def signal_handler(sig, frame):
         if instance_id:
             signal_name = "SIGINT" if sig == signal.SIGINT else "SIGTERM"
@@ -73,11 +73,11 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
                 logger.info(f"Successfully terminated instance {instance_id} after {signal_name}.")
             except Exception as cleanup_error:
                 logger.error(f"Failed to terminate instance {instance_id} after {signal_name}: {str(cleanup_error)}")
-        
+
         # Restore original signal handlers
         signal.signal(signal.SIGINT, original_sigint_handler)
         signal.signal(signal.SIGTERM, original_sigterm_handler)
-        
+
         # Raise appropriate exception based on signal type
         if sig == signal.SIGINT:
             raise KeyboardInterrupt
@@ -85,12 +85,12 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
             # For SIGTERM, exit gracefully
             import sys
             sys.exit(0)
-    
+
     try:
         # Set up signal handlers for both SIGINT and SIGTERM
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         if not os.getenv('AWS_SECURITY_GROUP_ID'):
             raise ValueError("AWS_SECURITY_GROUP_ID is not set in the environment variables.")
         if not os.getenv('AWS_SUBNET_ID'):
@@ -122,7 +122,7 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
             ],
             "BlockDeviceMappings": [
                 {
-                    "DeviceName": "/dev/sda1", 
+                    "DeviceName": "/dev/sda1",
                     "Ebs": {
                         # "VolumeInitializationRate": 300
                         "VolumeSize": 30,  # Size in GB
@@ -133,7 +133,7 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
                 }
             ]
         }
-        
+
         response = ec2_client.run_instances(**run_instances_params)
         instance_id = response['Instances'][0]['InstanceId']
 
@@ -188,7 +188,7 @@ def _allocate_vm(region=DEFAULT_REGION, screen_size=(1920, 1080)):
 class AWSVMManager(VMManager):
     """
     AWS VM Manager for managing virtual machines on AWS.
-    
+
     AWS does not need to maintain a registry of VMs, as it can dynamically allocate and deallocate VMs.
     This class supports both regular VM allocation and proxy-enabled VM allocation.
     """

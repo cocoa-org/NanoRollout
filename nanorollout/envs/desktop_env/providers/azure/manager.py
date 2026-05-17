@@ -84,4 +84,3 @@ class AzureVMManager(VMManager):
             chosen_vm_path = free_vms_paths[0][0]
             self.occupy_vm(chosen_vm_path, os.getpid(), region)
             return chosen_vm_path
-

@@ -137,7 +137,7 @@ def _install_vm(vm_name, vms_dir, downloaded_file_name, original_vm_name="Ubuntu
                 if attempt == max_retries - 1:
                     logger.error("Maximum retry attempts reached, failed to import the virtual machine.")
                     return False
-                
+
     def configure_vm_network(vm_name, interface_name=None):
         # Config of bridged network
         command = f'VBoxManage modifyvm "{vm_name}" --nic1 bridged'
@@ -169,7 +169,7 @@ def _install_vm(vm_name, vms_dir, downloaded_file_name, original_vm_name="Ubuntu
         else:
             logger.error(f"Failed to change to bridge adapter {interface_name}: {result.stderr}")
             return False
-        
+
         # # Config of NAT network
         # command = f"VBoxManage natnetwork add --netname natnet --network {nat_network} --dhcp on"
         # result = subprocess.run(command, shell=True, text=True, capture_output=True, encoding="utf-8",
@@ -242,7 +242,7 @@ def _install_vm(vm_name, vms_dir, downloaded_file_name, original_vm_name="Ubuntu
         else:
             logger.error(f"Get VM IP failed: {result.stderr}")
             return None
-        
+
     def change_resolution(vm_name, resolution=(1920, 1080, 32)):
         command = f'VBoxManage controlvm "{vm_name}" setvideomodehint {" ".join(map(str, resolution))}'
         result = subprocess.run(command, shell=True, text=True, capture_output=True, encoding="utf-8")
@@ -456,7 +456,7 @@ class VirtualBoxVMManager(VMManager):
                 chosen_vm_path = free_vms_paths[0][0]
                 self._occupy_vm(chosen_vm_path, os.getpid())
                 return chosen_vm_path
-            
+
         if allocation_needed:
             logger.info("No free virtual machine available. Generating a new one, which would take a while...☕")
             new_vm_name = generate_new_vm_name(vms_dir=VMS_DIR, os_type=os_type)

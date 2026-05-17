@@ -53,11 +53,11 @@ def _allocate_vm(screen_size=(1920, 1080)):
 
     # use global default configuration
     api_instance = ECSApi()
-    
+
     instance_id = None
     original_sigint_handler = signal.getsignal(signal.SIGINT)
     original_sigterm_handler = signal.getsignal(signal.SIGTERM)
-    
+
     def signal_handler(sig, frame):
         if instance_id:
             signal_name = "SIGINT" if sig == signal.SIGINT else "SIGTERM"
@@ -69,22 +69,22 @@ def _allocate_vm(screen_size=(1920, 1080)):
                 logger.info(f"Successfully terminated instance {instance_id} after {signal_name}.")
             except Exception as cleanup_error:
                 logger.error(f"Failed to terminate instance {instance_id} after {signal_name}: {str(cleanup_error)}")
-        
+
         # Restore original signal handlers
         signal.signal(signal.SIGINT, original_sigint_handler)
         signal.signal(signal.SIGTERM, original_sigterm_handler)
-        
+
         if sig == signal.SIGINT:
             raise KeyboardInterrupt
         else:
             import sys
             sys.exit(0)
-    
+
     try:
         # Set up signal handlers
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         # 创建实例参数
         create_instance_params = ecs_models.RunInstancesRequest(
             image_id = VOLCENGINE_IMAGE_ID,
@@ -106,13 +106,13 @@ def _allocate_vm(screen_size=(1920, 1080)):
             password = VOLCENGINE_DEFAULT_PASSWORD,  # 默认密码
             description = "OSWorld evaluation instance"
         )
-        
+
         # 创建实例
         response = api_instance.run_instances(create_instance_params)
         instance_id = response.instance_ids[0]
-        
+
         logger.info(f"Waiting for instance {instance_id} to be running...")
-        
+
         # 等待实例运行
         while True:
             instance_info = api_instance.describe_instances(ecs_models.DescribeInstancesRequest(
@@ -124,9 +124,9 @@ def _allocate_vm(screen_size=(1920, 1080)):
             elif status in ['STOPPED', 'ERROR']:
                 raise Exception(f"Instance {instance_id} failed to start, status: {status}")
             time.sleep(5)
-        
+
         logger.info(f"Instance {instance_id} is ready.")
-        
+
         # 获取实例IP地址
         try:
             instance_info = api_instance.describe_instances(ecs_models.DescribeInstancesRequest(
@@ -135,7 +135,7 @@ def _allocate_vm(screen_size=(1920, 1080)):
             print(instance_info)
             public_ip = instance_info.instances[0].eip_address.ip_address
             private_ip = instance_info.instances[0].network_interfaces[0].primary_ip_address
-            
+
             if public_ip:
                 vnc_url = f"http://{public_ip}:5910/vnc.html"
                 logger.info("="*80)
@@ -148,7 +148,7 @@ def _allocate_vm(screen_size=(1920, 1080)):
                 print(f"📍 Please open the above address in the browser for remote desktop access\n")
         except Exception as e:
             logger.warning(f"Failed to get VNC address for instance {instance_id}: {e}")
-            
+
     except KeyboardInterrupt:
         logger.warning("VM allocation interrupted by user (SIGINT).")
         if instance_id:
@@ -176,7 +176,7 @@ def _allocate_vm(screen_size=(1920, 1080)):
 class VolcengineVMManager(VMManager):
     """
     Volcengine VM Manager for managing virtual machines on Volcengine.
-    
+
     Volcengine does not need to maintain a registry of VMs, as it can dynamically allocate and deallocate VMs.
     """
     def __init__(self, **kwargs):

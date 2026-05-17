@@ -40,6 +40,8 @@ dependencies = [
   "jinja2",
   "litellm",
   "datasets",
+  "swebench @ git+https://github.com/SWE-bench/SWE-bench.git@6551c55bb4075b8dcc35369ec8d331580dda47b9",
+  "swesmith @ git+https://github.com/SWE-bench/SWE-smith.git",
   "docker",
   "unidiff",
   "ghapi>=1.0.10",

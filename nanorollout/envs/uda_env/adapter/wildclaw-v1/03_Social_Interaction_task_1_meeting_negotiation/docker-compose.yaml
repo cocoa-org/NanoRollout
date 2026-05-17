@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  wildclaw:
+    build: .
+    container_name: wildclaw_03_social_interaction_task_1_meeting_negotiation
+    environment:
+      - DISPLAY=:1
+      - VNC_PASSWORD=password
+    ports:
+      - "6080:6080"
+      - "5900:5900"
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    stdin_open: true
+    tty: true
