@@ -38,7 +38,15 @@ DATASET_MAPPING = {
     "swe-bench-pro": "ScaleAI/SWE-bench_Pro",
     "gym": "SWE-Gym/SWE-Gym",
     "rebench": "nebius/SWE-rebench",
+    "smith": "SWE-bench/SWE-smith",
     "smith-py": "SWE-bench/SWE-smith-py",
+    "smith-go": "SWE-bench/SWE-smith-go",
+    "smith-rs": "SWE-bench/SWE-smith-rs",
+    "smith-cpp": "SWE-bench/SWE-smith-cpp",
+    "smith-java": "SWE-bench/SWE-smith-java",
+    "smith-js": "SWE-bench/SWE-smith-js",
+    "smith-ts": "SWE-bench/SWE-smith-ts",
+    "smith-php": "SWE-bench/SWE-smith-php",
     "r2e-gym": "R2E-Gym/R2E-Gym-V1",
 }
 
@@ -272,6 +280,19 @@ class SweSmithDatasetAdapter(SweDatasetAdapter):
             self.id_separator,
         )
 
+    def image_name(
+        self,
+        instance: dict[str, Any],
+        env_type: str,
+        request: Optional[TaskRunRequest] = None,
+    ) -> str:
+        del request
+        if env_type in ("docker", "modal"):
+            image = instance.get("image_name") or instance.get("docker_image")
+            if image:
+                return str(image)
+        return super().image_name(instance, env_type)
+
     def setup_environment(
         self,
         env_obj: Any,
@@ -280,7 +301,11 @@ class SweSmithDatasetAdapter(SweDatasetAdapter):
     ) -> None:
         workspace_dir = shlex.quote(task.environment["workspace_dir"])
         instance_id = shlex.quote(request.instance_id)
-        env_obj.execute(f"cd {workspace_dir} && git checkout {instance_id}")
+        env_obj.execute(
+            f"cd {workspace_dir} && "
+            f"(git checkout {instance_id} || "
+            f"(git fetch --all --prune && git checkout {instance_id}))"
+        )
 
 
 class R2EGymDatasetAdapter(SweDatasetAdapter):

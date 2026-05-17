@@ -542,6 +542,34 @@ def test_swe_dataset_variants_are_explicit() -> None:
     assert isinstance(rebench_adapter, SweRebenchDatasetAdapter)
     assert rebench_adapter.dataset_revision == SWE_REBENCH_REVISION
     assert isinstance(resolve_swe_dataset_adapter("smith-py"), SweSmithDatasetAdapter)
+    for subset in (
+        "smith",
+        "smith-go",
+        "smith-rs",
+        "smith-cpp",
+        "smith-java",
+        "smith-js",
+        "smith-ts",
+        "smith-php",
+    ):
+        assert isinstance(resolve_swe_dataset_adapter(subset), SweSmithDatasetAdapter)
+
+
+def test_swesmith_adapter_uses_dataset_image_name() -> None:
+    adapter = resolve_swe_dataset_adapter("smith-go")
+
+    assert adapter.source_name == "SWE-bench/SWE-smith-go"
+    assert (
+        adapter.image_name(
+            {
+                "instance_id": "go-zoo__bone.31c3a0bb.lm_modify__16lnsk2c",
+                "image_name": "swebench/swesmith.x86_64.go-zoo_1776_bone.31c3a0bb",
+            },
+            "docker",
+            None,
+        )
+        == "swebench/swesmith.x86_64.go-zoo_1776_bone.31c3a0bb"
+    )
 
 
 def test_swebench_pro_adapter_uses_official_dataset_and_image() -> None:

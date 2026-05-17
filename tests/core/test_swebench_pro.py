@@ -1,7 +1,8 @@
-"""SWE-rebench eval and oracle checks.
+"""SWE-Bench Pro eval and oracle checks.
 
-The oracle test is intentionally opt-in. Running the full filtered split creates
-one container/sandbox per SWE-rebench task.
+The oracle test is intentionally opt-in. Running the full test split creates
+one container/sandbox per SWE-Bench Pro task and requires the official
+SWE-Bench Pro run_scripts directory.
 """
 
 from __future__ import annotations
@@ -20,55 +21,25 @@ import pytest
 
 from nanorollout.adapters.swe.common import create_environment
 from nanorollout.adapters.swe.task.datasets import resolve_swe_dataset_adapter
-from nanorollout.adapters.swe.task.rebench import (
+from nanorollout.adapters.swe.task.pro import (
+    _apply_patch_command,
     _build_eval_script,
-    _build_report,
-    _install_command,
-    _modified_files,
-    _resolve_parser,
-    _test_command,
+    _extract_json,
+    _report,
     _write_patch_file,
+    _write_runtime_scripts,
+    parse_list,
+    resolve_scripts_dir,
 )
 
 
-RUN_ORACLE_ENV = "NANOROLLOUT_RUN_SWEREBENCH_ORACLE"
+RUN_ORACLE_ENV = "NANOROLLOUT_RUN_SWEBENCH_PRO_ORACLE"
 _FAILURE_WRITE_LOCK = threading.Lock()
 
 
-def _reset_repo_command(instance: dict[str, Any]) -> str:
-    base_commit = shlex.quote(str(instance["base_commit"]))
-    return f"git reset --hard {base_commit}\ngit clean -fd"
-
-
-def test_rebench_eval_script_reinstalls_and_targets_test_patch_files() -> None:
+def test_swebench_pro_eval_script_uses_runtime_patch_file() -> None:
     instance = {
-        "base_commit": "abc123",
-        "repo": "owner/repo",
-        "test_patch": (
-            "diff --git a/tests/test_widget.py b/tests/test_widget.py\n"
-            "index 0000000..1111111 100644\n"
-            "--- a/tests/test_widget.py\n"
-            "+++ b/tests/test_widget.py\n"
-            "@@ -1 +1 @@\n"
-            "-def test_old(): pass\n"
-            "+def test_new(): pass\n"
-        ),
-        "install_config": {
-            "install": "pip install -e .[dev]",
-            "test_cmd": "pytest -q",
-        },
-    }
-
-    script = _build_eval_script(instance, "/testbed")
-
-    assert script.index("pip install -e .[dev]") < script.index("git apply -v -")
-    assert "pytest -q tests/test_widget.py" in script
-
-
-def test_rebench_eval_script_can_apply_test_patch_from_file() -> None:
-    instance = {
-        "base_commit": "abc123",
-        "repo": "owner/repo",
+        "selected_test_files_to_run": ["tests/test_widget.py"],
         "test_patch": (
             "diff --git a/tests/test_widget.py b/tests/test_widget.py\n"
             "--- a/tests/test_widget.py\n"
@@ -77,57 +48,40 @@ def test_rebench_eval_script_can_apply_test_patch_from_file() -> None:
             "-def test_old(): pass\n"
             "+def test_new(): pass\n"
         ),
-        "install_config": {
-            "install": "pip install -e .[dev]",
-            "test_cmd": "pytest -q",
-        },
     }
 
     script = _build_eval_script(
         instance,
-        "/testbed",
-        test_patch_path="/tmp/nanorollout_swerebench/test.patch",
+        "/app",
+        test_patch_path="/tmp/nanorollout_swebench_pro/test.patch",
     )
 
     assert (
         "git apply -v --whitespace=nowarn "
-        "/tmp/nanorollout_swerebench/test.patch"
+        "/tmp/nanorollout_swebench_pro/test.patch"
     ) in script
     assert "diff --git a/tests/test_widget.py" not in script
 
 
-def _coerce_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return [str(value)]
+def _oracle_env_value(name: str, default: str | None = None) -> str | None:
+    return os.environ.get(f"NANOROLLOUT_SWEBENCH_PRO_ORACLE_{name}", default)
 
 
-def _apply_patch_file_command(label: str, patch_path: str | None) -> str:
-    if not patch_path:
-        return f"echo 'No {label} patch'"
-    return (
-        "git apply -v --whitespace=nowarn "
-        f"{shlex.quote(patch_path)} || exit 2"
-    )
-
-
-def _reset_tests_command(instance: dict[str, Any]) -> str:
-    test_files = _modified_files(str(instance.get("test_patch") or ""))
-    if not test_files:
-        return "echo 'No test files to reset'"
+def _reset_repo_command(instance: dict[str, Any]) -> str:
     base_commit = shlex.quote(str(instance["base_commit"]))
-    files = " ".join(shlex.quote(path) for path in test_files)
-    return f"git checkout {base_commit} {files}"
+    return "\n".join(
+        [
+            f"git reset --hard {base_commit}",
+            "git clean -fd",
+            f"git checkout {base_commit}",
+        ]
+    )
 
 
 def _shell_prefix(workspace_dir: str) -> str:
     quoted_workspace = shlex.quote(workspace_dir)
     return "\n".join(
         [
-            "source /opt/miniconda3/bin/activate",
-            "conda activate testbed",
             f"cd {quoted_workspace}",
             f"git config --global --add safe.directory {quoted_workspace}",
         ]
@@ -141,12 +95,15 @@ def _execute(env_obj: Any, workspace_dir: str, command: str, timeout: int):
     )
 
 
-def _parse_status_map(instance: dict[str, Any], output: str) -> dict[str, str]:
-    parser_name = (instance.get("install_config") or {}).get(
-        "log_parser",
-        "parse_log_pytest",
-    )
-    return _resolve_parser(str(parser_name))(output)
+def _status_map(output_json: dict[str, Any]) -> dict[str, str]:
+    return {
+        str(test.get("name")): str(test.get("status"))
+        for test in output_json.get("tests", [])
+    }
+
+
+def _is_passed(status: str | None) -> bool:
+    return str(status or "").upper() == "PASSED"
 
 
 def _assert_tests_present(
@@ -155,12 +112,30 @@ def _assert_tests_present(
     phase: str,
     status_map: dict[str, str],
     tests: list[str],
+    output: str = "",
 ) -> None:
     missing = [test for test in tests if test not in status_map]
+    observed = sorted(status_map)[:20]
     assert not missing, (
         f"{instance_id} {phase}: parser did not report expected tests: "
-        f"{missing[:10]}"
+        f"{missing[:10]}; observed={observed}; output_tail={output[-4000:]}"
     )
+
+
+def _run_swebench_pro_tests(
+    *,
+    env_obj: Any,
+    instance: dict[str, Any],
+    workspace_dir: str,
+    timeout: int,
+    test_patch_path: str | None,
+) -> tuple[dict[str, Any], str]:
+    result = env_obj.execute(
+        _build_eval_script(instance, workspace_dir, test_patch_path),
+        timeout=timeout,
+    )
+    output = result.output or ""
+    return _extract_json(output), output
 
 
 def _write_failure(
@@ -186,20 +161,23 @@ def _write_failure(
             handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
-def _run_swerebench_oracle_instance(
+def _run_swebench_pro_oracle_instance(
     *,
     instance: dict[str, Any],
     dataset: Any,
+    scripts_dir: Path,
     env_type: str,
     timeout: int,
     workspace_dir: str,
 ) -> str:
     instance_id = str(instance["instance_id"])
     image = dataset.image_name(instance, env_type, None)
-    install_config = instance.get("install_config") or {}
-    test_cmd = _test_command(instance, install_config["test_cmd"])
-    fail_to_pass = _coerce_list(instance.get("FAIL_TO_PASS"))
-    pass_to_pass = _coerce_list(instance.get("PASS_TO_PASS"))
+    fail_to_pass = parse_list(
+        instance.get("fail_to_pass") or instance.get("FAIL_TO_PASS")
+    )
+    pass_to_pass = parse_list(
+        instance.get("pass_to_pass") or instance.get("PASS_TO_PASS")
+    )
 
     env_obj = create_environment(
         env_type=env_type,
@@ -213,102 +191,104 @@ def _run_swerebench_oracle_instance(
     )
     try:
         env_obj.start()
-
-        install = _install_command(install_config)
-        if install:
-            install_result = _execute(env_obj, workspace_dir, install, timeout)
-            assert install_result.exit_code == 0, (
-                f"{instance_id} install failed:\n{install_result.output[-4000:]}"
-            )
-
+        _write_runtime_scripts(env_obj, scripts_dir, instance_id)
         test_patch_path = _write_patch_file(
             env_obj,
             "test",
             str(instance.get("test_patch") or ""),
         )
-        apply_tests = _execute(
+        gold_patch_path = _write_patch_file(
             env_obj,
-            workspace_dir,
-            "\n".join(
-                [
-                    _reset_tests_command(instance),
-                    _apply_patch_file_command("test", test_patch_path),
-                ]
-            ),
-            timeout,
-        )
-        assert apply_tests.exit_code == 0, (
-            f"{instance_id} test_patch apply failed:\n{apply_tests.output[-4000:]}"
+            "gold",
+            str(instance.get("patch") or ""),
         )
 
-        before = _execute(env_obj, workspace_dir, test_cmd, timeout)
-        before_status = _parse_status_map(instance, before.output)
+        before_prepare = _execute(
+            env_obj,
+            workspace_dir,
+            _reset_repo_command(instance),
+            timeout,
+        )
+        assert before_prepare.exit_code == 0, (
+            f"{instance_id} reset before A failed:\n"
+            f"{before_prepare.output[-4000:]}"
+        )
+
+        before_json, before_output = _run_swebench_pro_tests(
+            env_obj=env_obj,
+            instance=instance,
+            workspace_dir=workspace_dir,
+            timeout=timeout,
+            test_patch_path=test_patch_path,
+        )
+        before_status = _status_map(before_json)
         _assert_tests_present(
             instance_id=instance_id,
             phase="before gold patch",
             status_map=before_status,
-            tests=fail_to_pass + pass_to_pass,
+            tests=pass_to_pass,
+            output=before_output,
         )
         unexpectedly_passed = [
-            test for test in fail_to_pass if before_status.get(test) == "PASSED"
+            test for test in fail_to_pass if _is_passed(before_status.get(test))
         ]
         assert not unexpectedly_passed, (
             f"{instance_id} before gold patch: FAIL_TO_PASS unexpectedly passed: "
             f"{unexpectedly_passed[:10]}"
         )
         broken_maintenance = [
-            test for test in pass_to_pass if before_status.get(test) != "PASSED"
+            test for test in pass_to_pass if not _is_passed(before_status.get(test))
         ]
         assert not broken_maintenance, (
             f"{instance_id} before gold patch: PASS_TO_PASS did not pass: "
             f"{broken_maintenance[:10]}"
         )
 
-        gold_patch_path = _write_patch_file(
-            env_obj,
-            "gold",
-            str(instance.get("patch") or ""),
-        )
-        prepare_gold = _execute(
+        after_prepare = _execute(
             env_obj,
             workspace_dir,
             "\n".join(
                 [
                     _reset_repo_command(instance),
-                    _apply_patch_file_command("gold", gold_patch_path),
-                    _reset_tests_command(instance),
-                    _apply_patch_file_command("test", test_patch_path),
+                    _apply_patch_command("gold", gold_patch_path),
                 ]
             ),
             timeout,
         )
-        assert prepare_gold.exit_code == 0, (
-            f"{instance_id} gold/test patch setup failed:\n"
-            f"{prepare_gold.output[-4000:]}"
+        assert after_prepare.exit_code == 0, (
+            f"{instance_id} gold patch setup failed:\n"
+            f"{after_prepare.output[-4000:]}"
         )
 
-        after = _execute(env_obj, workspace_dir, test_cmd, timeout)
-        after_status = _parse_status_map(instance, after.output)
+        after_json, after_output = _run_swebench_pro_tests(
+            env_obj=env_obj,
+            instance=instance,
+            workspace_dir=workspace_dir,
+            timeout=timeout,
+            test_patch_path=test_patch_path,
+        )
+        after_status = _status_map(after_json)
         _assert_tests_present(
             instance_id=instance_id,
             phase="after gold patch",
             status_map=after_status,
             tests=fail_to_pass + pass_to_pass,
+            output=after_output,
         )
-        report, resolved_status = _build_report(instance, after_status)
-        assert resolved_status == "RESOLVED_FULL", (
-            f"{instance_id} after gold patch was {resolved_status}; "
-            f"report={report}"
-        )
+        report = _report(instance, after_json)
+        assert not report["FAIL_TO_PASS"]["failure"] and not report["PASS_TO_PASS"][
+            "failure"
+        ], f"{instance_id} after gold patch did not resolve; report={report}"
         return instance_id
     finally:
         env_obj.stop()
 
 
-def _run_swerebench_oracle_instances(
+def _run_swebench_pro_oracle_instances(
     *,
     instances: list[dict[str, Any]],
     dataset: Any,
+    scripts_dir: Path,
     env_type: str,
     timeout: int,
     workspace_dir: str,
@@ -324,7 +304,7 @@ def _run_swerebench_oracle_instances(
             return
         if completed == total or completed % progress_every == 0:
             print(
-                "[swerebench oracle] "
+                "[swebench-pro oracle] "
                 f"{completed}/{total} complete; failures={len(failures)}; "
                 f"last={instance_id}",
                 flush=True,
@@ -334,9 +314,10 @@ def _run_swerebench_oracle_instances(
         for completed, instance in enumerate(instances, start=1):
             instance_id = str(instance["instance_id"])
             try:
-                _run_swerebench_oracle_instance(
+                _run_swebench_pro_oracle_instance(
                     instance=instance,
                     dataset=dataset,
+                    scripts_dir=scripts_dir,
                     env_type=env_type,
                     timeout=timeout,
                     workspace_dir=workspace_dir,
@@ -353,9 +334,10 @@ def _run_swerebench_oracle_instances(
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             futures = {
                 executor.submit(
-                    _run_swerebench_oracle_instance,
+                    _run_swebench_pro_oracle_instance,
                     instance=instance,
                     dataset=dataset,
+                    scripts_dir=scripts_dir,
                     env_type=env_type,
                     timeout=timeout,
                     workspace_dir=workspace_dir,
@@ -378,12 +360,12 @@ def _run_swerebench_oracle_instances(
     if failures:
         sample = "\n\n".join(failures[:20])
         pytest.fail(
-            f"{len(failures)}/{total} SWE-rebench oracle checks failed. "
+            f"{len(failures)}/{total} SWE-Bench Pro oracle checks failed. "
             f"First {min(20, len(failures))} failures:\n\n{sample}"
         )
 
 
-def test_swerebench_oracle_records_failures_jsonl(
+def test_swebench_pro_oracle_records_failures_jsonl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -393,18 +375,19 @@ def test_swerebench_oracle_records_failures_jsonl(
 
     monkeypatch.setattr(
         sys.modules[__name__],
-        "_run_swerebench_oracle_instance",
+        "_run_swebench_pro_oracle_instance",
         fail_worker,
     )
     failures_path = tmp_path / "nested" / "failures.jsonl"
 
     with pytest.raises(pytest.fail.Exception):
-        _run_swerebench_oracle_instances(
+        _run_swebench_pro_oracle_instances(
             instances=[{"instance_id": "fake-1"}],
             dataset=object(),
+            scripts_dir=tmp_path,
             env_type="docker",
             timeout=1,
-            workspace_dir="/testbed",
+            workspace_dir="/app",
             concurrency=2,
             failures_path=str(failures_path),
             progress_every=0,
@@ -425,18 +408,33 @@ def test_swerebench_oracle_records_failures_jsonl(
     assert "AssertionError: boom" in rows[0]["traceback"]
 
 
-def _oracle_env_value(name: str, default: str | None = None) -> str | None:
-    return os.environ.get(f"NANOROLLOUT_SWEREBENCH_ORACLE_{name}", default)
+def _resolve_oracle_scripts_dir() -> Path:
+    extra_args = {}
+    scripts_dir = _oracle_env_value("SCRIPTS_DIR")
+    repo_dir = _oracle_env_value("REPO")
+    if scripts_dir:
+        extra_args["swebench_pro_scripts_dir"] = scripts_dir
+    if repo_dir:
+        extra_args["swebench_pro_repo"] = repo_dir
+    resolved = resolve_scripts_dir(extra_args)
+    assert resolved is not None, (
+        "SWE-Bench Pro oracle test needs official run scripts. Set "
+        "SWEBENCH_PRO_SCRIPTS_DIR, SWEBENCH_PRO_REPO, "
+        "NANOROLLOUT_SWEBENCH_PRO_ORACLE_SCRIPTS_DIR, or "
+        "NANOROLLOUT_SWEBENCH_PRO_ORACLE_REPO."
+    )
+    return resolved
 
 
-def _run_swerebench_filtered_ab_all_tasks() -> None:
-    dataset = resolve_swe_dataset_adapter("rebench")
-    split = _oracle_env_value("SPLIT", "filtered") or "filtered"
+def _run_swebench_pro_test_oracle_all_tasks() -> None:
+    dataset = resolve_swe_dataset_adapter("swebench-pro")
+    split = _oracle_env_value("SPLIT", "test") or "test"
     env_type = _oracle_env_value("ENV", "docker") or "docker"
-    timeout = int(_oracle_env_value("TIMEOUT", "1800") or "1800")
+    timeout = int(_oracle_env_value("TIMEOUT", "3600") or "3600")
     concurrency = int(_oracle_env_value("CONCURRENCY", "1") or "1")
     failures_path = _oracle_env_value("FAILURES_PATH")
     progress_every = int(_oracle_env_value("PROGRESS_EVERY", "10") or "10")
+    scripts_dir = _resolve_oracle_scripts_dir()
     workspace_dir = dataset.workspace_dir()
 
     instances = dataset.load_instances(split)
@@ -459,11 +457,12 @@ def _run_swerebench_filtered_ab_all_tasks() -> None:
     if limit:
         instances = instances[: int(limit)]
 
-    assert instances, "No SWE-rebench instances selected for oracle test"
+    assert instances, "No SWE-Bench Pro instances selected for oracle test"
 
-    _run_swerebench_oracle_instances(
+    _run_swebench_pro_oracle_instances(
         instances=instances,
         dataset=dataset,
+        scripts_dir=scripts_dir,
         env_type=env_type,
         timeout=timeout,
         workspace_dir=workspace_dir,
@@ -475,15 +474,7 @@ def _run_swerebench_filtered_ab_all_tasks() -> None:
 
 @pytest.mark.skipif(
     os.environ.get(RUN_ORACLE_ENV) != "1",
-    reason=f"set {RUN_ORACLE_ENV}=1 to run all SWE-rebench filtered oracle checks",
+    reason=f"set {RUN_ORACLE_ENV}=1 to run all SWE-Bench Pro oracle checks",
 )
-def test_swerebench_filtered_ab_all_tasks() -> None:
-    _run_swerebench_filtered_ab_all_tasks()
-
-
-@pytest.mark.skipif(
-    os.environ.get(RUN_ORACLE_ENV) != "1",
-    reason=f"set {RUN_ORACLE_ENV}=1 to run all SWE-rebench filtered oracle checks",
-)
-def test_swerebench_filtered_oracle_all_tasks() -> None:
-    _run_swerebench_filtered_ab_all_tasks()
+def test_swebench_pro_test_ab_all_tasks() -> None:
+    _run_swebench_pro_test_oracle_all_tasks()

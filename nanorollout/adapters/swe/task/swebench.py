@@ -44,14 +44,42 @@ def _extract_marked_output(output: str, start: str, end: str) -> str:
     return output.split(start, 1)[1].split(end, 1)[0]
 
 
-def _test_files_from_instance(instance: dict[str, Any]) -> list[str]:
-    test_files: set[str] = set()
-    for key in ("FAIL_TO_PASS", "PASS_TO_PASS"):
-        for test_case in instance.get(key) or []:
-            candidate = str(test_case).split("::", 1)[0].strip()
-            if candidate:
-                test_files.add(candidate)
-    return sorted(test_files)
+def _restore_swesmith_hidden_tests_command() -> str:
+    return "\n".join(
+        [
+            (
+                "mapfile -d '' NANOROLLOUT_SWESMITH_TEST_FILES "
+                "< <(git diff --name-only -z HEAD~1..HEAD)"
+            ),
+            'if [ "${#NANOROLLOUT_SWESMITH_TEST_FILES[@]}" -gt 0 ]; then',
+            '  git checkout HEAD~1 -- "${NANOROLLOUT_SWESMITH_TEST_FILES[@]}"',
+            "else",
+            "  echo 'No SWE-smith hidden tests to restore'",
+            "fi",
+        ]
+    )
+
+
+def _build_swesmith_eval_script(workspace_dir: str, test_cmd: str) -> str:
+    try:
+        from swesmith.constants import TEST_OUTPUT_END, TEST_OUTPUT_START
+    except ImportError as exc:
+        raise _missing_package_error("swesmith") from exc
+
+    return "\n".join(
+        [
+            "#!/bin/bash",
+            "set -uxo pipefail",
+            "export PATH=/go/bin:/usr/local/go/bin:/usr/local/cargo/bin:"
+            "/root/.cargo/bin:/root/.local/bin:$PATH",
+            f"cd {workspace_dir}",
+            f"git config --global --add safe.directory {workspace_dir}",
+            _restore_swesmith_hidden_tests_command(),
+            f"echo '{TEST_OUTPUT_START}'",
+            test_cmd,
+            f"echo '{TEST_OUTPUT_END}'",
+        ]
+    )
 
 
 def _run_swesmith_eval(
@@ -77,27 +105,8 @@ def _run_swesmith_eval(
     eval_output = None
     try:
         profile = registry.get_from_inst(instance)
-        test_cmd, test_files = profile.get_test_cmd(instance)
-        if not test_files:
-            test_files = _test_files_from_instance(instance)
-        reset_tests = (
-            f"git checkout HEAD~2 {' '.join(str(path) for path in test_files)}"
-            if test_files
-            else "echo 'No test files to reset'"
-        )
-        eval_script = "\n".join(
-            [
-                "#!/bin/bash",
-                "set -uxo pipefail",
-                f"cd {workspace_dir}",
-                f"git config --global --add safe.directory {workspace_dir}",
-                reset_tests,
-                f"echo '{TEST_OUTPUT_START}'",
-                test_cmd,
-                f"echo '{TEST_OUTPUT_END}'",
-                reset_tests,
-            ]
-        )
+        test_cmd, _ = profile.get_test_cmd(instance)
+        eval_script = _build_swesmith_eval_script(workspace_dir, test_cmd)
         eval_result = env_obj.execute(
             eval_script, timeout=eval_timeout or profile.timeout
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import re
 import shlex
 import tempfile
@@ -50,9 +51,55 @@ def _modified_files(patch: str) -> list[str]:
     return files
 
 
-def _apply_patch_command(test_patch: str) -> str:
+def _write_env_file(env_obj: Any, path: str, content: str) -> None:
+    parent = str(Path(path).parent)
+    if parent and parent != ".":
+        mkdir = env_obj.execute(f"mkdir -p {shlex.quote(parent)}")
+        if mkdir.exit_code != 0:
+            raise RuntimeError(f"Failed to create {parent}: {mkdir.output}")
+
+    upload_file = getattr(env_obj, "upload_file", None)
+    if callable(upload_file):
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".patch",
+            delete=False,
+        )
+        source_path = Path(handle.name)
+        try:
+            with handle:
+                handle.write(content)
+            upload_file(source_path, path)
+        finally:
+            source_path.unlink(missing_ok=True)
+        return
+
+    result = env_obj.write_file(path, content)
+    if result.exit_code != 0:
+        raise RuntimeError(f"Failed to write {path}: {result.output}")
+
+
+def _patch_file_path(label: str) -> str:
+    return f"/tmp/nanorollout_swerebench/{label}.patch"
+
+
+def _write_patch_file(env_obj: Any, label: str, patch: str) -> Optional[str]:
+    if not patch.strip():
+        return None
+    path = _patch_file_path(label)
+    _write_env_file(env_obj, path, patch)
+    return path
+
+
+def _apply_patch_command(test_patch: str, patch_path: Optional[str] = None) -> str:
     if not test_patch.strip():
         return "echo 'No test patch'"
+    if patch_path:
+        return (
+            "git apply -v --whitespace=nowarn "
+            f"{shlex.quote(patch_path)} || exit 2"
+        )
     delimiter = "EOF_417120113996"
     return f"git apply -v - <<'{delimiter}'\n{test_patch}\n{delimiter}"
 
@@ -95,7 +142,11 @@ def _resolve_parser(parser_name: str):
     return parse
 
 
-def _build_eval_script(instance: dict[str, Any], workspace_dir: str) -> str:
+def _build_eval_script(
+    instance: dict[str, Any],
+    workspace_dir: str,
+    test_patch_path: Optional[str] = None,
+) -> str:
     install_config = instance.get("install_config") or {}
     test_cmd = install_config.get("test_cmd")
     if not test_cmd:
@@ -128,7 +179,7 @@ def _build_eval_script(instance: dict[str, Any], workspace_dir: str) -> str:
     eval_commands.extend(
         [
             reset_tests,
-            _apply_patch_command(test_patch),
+            _apply_patch_command(test_patch, test_patch_path),
             f"echo '{START_TEST_OUTPUT}'",
             _test_command(instance, test_cmd),
             f"echo '{END_TEST_OUTPUT}'",
@@ -200,7 +251,12 @@ def run_rebench_eval(
     instance_id = instance.get("instance_id", "unknown")
     eval_output = None
     try:
-        eval_script = _build_eval_script(instance, workspace_dir)
+        test_patch_path = _write_patch_file(
+            env_obj,
+            "test",
+            str(instance.get("test_patch") or ""),
+        )
+        eval_script = _build_eval_script(instance, workspace_dir, test_patch_path)
         result = env_obj.execute(eval_script, timeout=eval_timeout or 1800)
         eval_output = result.output or ""
         _write_temp_log(eval_output)

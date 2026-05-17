@@ -7,11 +7,13 @@ import json
 import logging
 import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+_WORK_DIR = "/tmp/nanorollout_swebench_pro"
 _JSON_START = "NANOROLLOUT_SWEBENCH_PRO_JSON_START"
 _JSON_END = "NANOROLLOUT_SWEBENCH_PRO_JSON_END"
 
@@ -77,24 +79,71 @@ def _read_script(scripts_dir: Path, instance_id: str, filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _heredoc(path: str, content: str) -> str:
-    delimiter = "NANOROLLOUT_EOF"
-    while delimiter in content:
-        delimiter += "_X"
-    return f"cat > {shlex.quote(path)} <<'{delimiter}'\n{content}\n{delimiter}"
+def _write_env_file(env_obj: Any, path: str, content: str) -> None:
+    parent = str(Path(path).parent)
+    if parent and parent != ".":
+        mkdir = env_obj.execute(f"mkdir -p {shlex.quote(parent)}")
+        if mkdir.exit_code != 0:
+            raise RuntimeError(f"Failed to create {parent}: {mkdir.output}")
+
+    upload_file = getattr(env_obj, "upload_file", None)
+    if callable(upload_file):
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".txt",
+            delete=False,
+        )
+        source_path = Path(handle.name)
+        try:
+            with handle:
+                handle.write(content)
+            upload_file(source_path, path)
+        finally:
+            source_path.unlink(missing_ok=True)
+        return
+
+    result = env_obj.write_file(path, content)
+    if result.exit_code != 0:
+        raise RuntimeError(f"Failed to write {path}: {result.output}")
 
 
-def _apply_patch_command(patch: str) -> str:
+def _runtime_path(filename: str) -> str:
+    return f"{_WORK_DIR}/{filename}"
+
+
+def _write_patch_file(env_obj: Any, label: str, patch: str) -> Optional[str]:
     patch = patch or ""
     if not patch.strip():
-        return "echo 'No SWE-Bench Pro test patch'"
+        return None
+    path = _runtime_path(f"{label}.patch")
+    _write_env_file(env_obj, path, patch)
+    return path
+
+
+def _write_runtime_scripts(
+    env_obj: Any,
+    scripts_dir: Path,
+    instance_id: str,
+) -> None:
+    _write_env_file(
+        env_obj,
+        _runtime_path("run_script.sh"),
+        _read_script(scripts_dir, instance_id, "run_script.sh"),
+    )
+    _write_env_file(
+        env_obj,
+        _runtime_path("parser.py"),
+        _read_script(scripts_dir, instance_id, "parser.py"),
+    )
+
+
+def _apply_patch_command(label: str, patch_path: Optional[str]) -> str:
+    if not patch_path:
+        return f"echo 'No SWE-Bench Pro {label} patch'"
     return (
-        _heredoc("/tmp/nanorollout_swebench_pro/test.patch", patch)
-        + "\n"
-        + (
-            "git apply -v --whitespace=nowarn "
-            "/tmp/nanorollout_swebench_pro/test.patch || exit 2"
-        )
+        "git apply -v --whitespace=nowarn "
+        f"{shlex.quote(patch_path)} || exit 2"
     )
 
 
@@ -102,7 +151,13 @@ def _extract_json(output: str) -> dict[str, Any]:
     if _JSON_START not in output or _JSON_END not in output:
         raise ValueError("SWE-Bench Pro parser output markers were not found")
     raw_json = output.split(_JSON_START, 1)[1].split(_JSON_END, 1)[0].strip()
-    return json.loads(raw_json)
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "SWE-Bench Pro parser output was not JSON: "
+            f"{raw_json[-1000:] or '<empty>'}"
+        ) from exc
 
 
 def _tests_by_status(output_json: dict[str, Any], status: str) -> set[str]:
@@ -133,6 +188,48 @@ def _report(instance: dict[str, Any], output_json: dict[str, Any]) -> dict[str, 
     }
 
 
+def _build_eval_script(
+    instance: dict[str, Any],
+    workspace_dir: str,
+    test_patch_path: Optional[str],
+) -> str:
+    selected_tests = ",".join(parse_list(instance.get("selected_test_files_to_run")))
+    run_script = _runtime_path("run_script.sh")
+    parser = _runtime_path("parser.py")
+    stdout_log = _runtime_path("stdout.log")
+    stderr_log = _runtime_path("stderr.log")
+    output_json = _runtime_path("output.json")
+    run_command = (
+        f"bash {run_script} {shlex.quote(selected_tests)} "
+        f"> {stdout_log} 2> {stderr_log}"
+        if selected_tests
+        else f"bash {run_script} > {stdout_log} 2> {stderr_log}"
+    )
+    return "\n".join(
+        [
+            "#!/bin/bash",
+            "set -uxo pipefail",
+            "export PATH=/go/bin:/usr/local/go/bin:/root/.local/bin:$PATH",
+            f"mkdir -p {_WORK_DIR}",
+            f"chmod +x {run_script}",
+            f"cd {shlex.quote(workspace_dir)}",
+            "git config --global --add safe.directory "
+            f"{shlex.quote(workspace_dir)}",
+            _apply_patch_command("test", test_patch_path),
+            run_command,
+            f"python3 {parser} {stdout_log} {stderr_log} {output_json}",
+            "set +x",
+            f"echo {_JSON_START}",
+            f"cat {output_json}",
+            f"echo {_JSON_END}",
+            "echo NANOROLLOUT_SWEBENCH_PRO_STDOUT_TAIL",
+            f"tail -c 4000 {stdout_log} || true",
+            "echo NANOROLLOUT_SWEBENCH_PRO_STDERR_TAIL",
+            f"tail -c 4000 {stderr_log} || true",
+        ]
+    )
+
+
 def run_swebench_pro_eval(
     env_obj: Any,
     instance: dict[str, Any],
@@ -143,37 +240,13 @@ def run_swebench_pro_eval(
     instance_id = str(instance.get("instance_id", "unknown"))
     eval_output = None
     try:
-        run_script = _read_script(scripts_dir, instance_id, "run_script.sh")
-        parser = _read_script(scripts_dir, instance_id, "parser.py")
-        selected_tests = ",".join(
-            parse_list(instance.get("selected_test_files_to_run"))
+        _write_runtime_scripts(env_obj, scripts_dir, instance_id)
+        test_patch_path = _write_patch_file(
+            env_obj,
+            "test",
+            str(instance.get("test_patch") or ""),
         )
-        work_dir = "/tmp/nanorollout_swebench_pro"
-        eval_script = "\n".join(
-            [
-                "#!/bin/bash",
-                "set -uxo pipefail",
-                f"mkdir -p {work_dir}",
-                _heredoc(f"{work_dir}/run_script.sh", run_script),
-                _heredoc(f"{work_dir}/parser.py", parser),
-                f"chmod +x {work_dir}/run_script.sh",
-                f"cd {shlex.quote(workspace_dir)}",
-                "git config --global --add safe.directory "
-                f"{shlex.quote(workspace_dir)}",
-                _apply_patch_command(str(instance.get("test_patch") or "")),
-                (
-                    f"bash {work_dir}/run_script.sh {shlex.quote(selected_tests)} "
-                    f"> {work_dir}/stdout.log 2> {work_dir}/stderr.log"
-                ),
-                (
-                    f"python {work_dir}/parser.py {work_dir}/stdout.log "
-                    f"{work_dir}/stderr.log {work_dir}/output.json"
-                ),
-                f"echo {_JSON_START}",
-                f"cat {work_dir}/output.json",
-                f"echo {_JSON_END}",
-            ]
-        )
+        eval_script = _build_eval_script(instance, workspace_dir, test_patch_path)
         result = env_obj.execute(eval_script, timeout=eval_timeout or 3600)
         eval_output = result.output or ""
         output_json = _extract_json(eval_output)
