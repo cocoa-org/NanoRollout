@@ -1,0 +1,4 @@
+instruction: |
+  I'm behind on triaging my support inbox. Can you go through everything, figure out what's urgent, and put together an escalation report? Route each issue to the right person on our team. Don't message customers directly — draft those for my review.
+
+  Write the report to `/tmp_workspace/results/results.md`.

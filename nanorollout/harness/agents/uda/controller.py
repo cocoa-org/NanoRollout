@@ -1,0 +1,3494 @@
+"""
+Controller classes for generating actions/commands to solve programming tasks.
+"""
+
+import os
+import re
+import json
+import time
+import base64
+from typing import Any, Dict, List, Optional
+from openai import OpenAI
+from nanorollout.envs.uda_env.utils import get_logger, colorize
+from nanorollout.envs.uda_env.tools import (
+    get_computer_use_tools,
+    get_unified_tools,
+    map_tool_call_to_action,
+)
+
+# Try to import Gemini libraries
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
+    class _GeminiTypesStub:
+        """Stub so that type annotations like `types.Tool` don't raise at import time."""
+        def __getattr__(self, name):
+            return Any
+    types = _GeminiTypesStub()
+
+# Try to import Anthropic libraries
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    anthropic = Any
+
+logger = get_logger("uda.llm")
+
+
+MODEL_PRICING_REGISTRY = {
+    # Per 1,000,000 tokens, USD
+    "gpt-5.4": {
+        "input": 2.50,
+        "cached_input": 1.25,
+        "output": 15.00,
+    },
+    "claude-opus-4-6": {
+        "input": 5.00,
+        "cache_write": 6.25,
+        "cache_read": 0.50,
+        "output": 25.00,
+    },
+    "claude-sonnet-4-6": {
+        "input": 3.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+        "output": 15.00,
+    },
+    "gemini-3.1-pro-preview": {
+        "input": 2.00,
+        "input_over_200k": 4.00,
+        "cached_input": 0.20,
+        "cached_input_over_200k": 0.40,
+        "output": 12.00,
+        "output_over_200k": 18.00,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Cache-control helpers (ported from
+# anthropic-quickstarts/computer-use-best-practices/loop.py).
+#
+# Anthropic allows at most 4 cache_control breakpoints per request. ClaudeLLM
+# spends one on the system block (in _make_api_call) and up to 3 here on the
+# trailing user-content blocks. Stale breakpoints from prior turns are popped
+# first so the cache pattern actually rolls forward with new turns instead of
+# fragmenting.
+# ---------------------------------------------------------------------------
+_CACHEABLE_BLOCK_TYPES = frozenset({"tool_result", "text", "image"})
+
+
+def _set_trailing_cache_control(messages: list, max_breakpoints: int = 3) -> None:
+    """Mark up to ``max_breakpoints`` trailing cacheable blocks for Anthropic
+    ephemeral caching, after clearing any breakpoints left by previous turns.
+
+    Operates in place on the user-role content lists. Only blocks at the tail
+    of the message stream are eligible — that's where new context lands each
+    turn, and where caching a fresh prefix actually buys us something.
+
+    Safe on non-Claude shapes (it just won't find any cacheable blocks).
+    """
+    cacheable_blocks: list = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype not in _CACHEABLE_BLOCK_TYPES:
+                continue
+            # Clear any breakpoint from a previous call.
+            block.pop("cache_control", None)
+            cacheable_blocks.append(block)
+
+    for block in cacheable_blocks[-max_breakpoints:]:
+        block["cache_control"] = {"type": "ephemeral"}
+
+
+# ---------------------------------------------------------------------------
+# Retry / backoff (ported from
+# anthropic-quickstarts/computer-use-best-practices/loop.py:_call_with_retry).
+#
+# Recoverable vs unrecoverable distinction is taxonomy-driven (matches HTTP
+# status code semantics) rather than treating every exception as retryable,
+# which is what our prior ad-hoc retry did. Exponential backoff with jitter
+# avoids thundering-herd on shared rate-limit windows.
+# ---------------------------------------------------------------------------
+
+_UNRECOVERABLE_4XX_STATUSES = frozenset({400, 401, 403, 404, 422})
+
+
+def _is_recoverable_api_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is worth retrying.
+
+    Mirrors the best-practices taxonomy without depending on Anthropic's
+    SDK-specific exception classes (we have to handle OpenAI, Anthropic,
+    Google, and httpx errors uniformly):
+
+    * Hard 4xx client errors (400/401/403/404/422): not retryable.
+    * 429 (rate limit) and 5xx: retryable.
+    * Connection / timeout errors that lack a status code: retryable.
+    * "overloaded" / "timeout" / "connection" in the message: retryable.
+    * Anything else: default to retryable to preserve our prior generous
+      retry behaviour. Errors that fail repeatedly will still hit the
+      attempt cap.
+    """
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        if status_code in _UNRECOVERABLE_4XX_STATUSES:
+            return False
+        if 400 <= status_code < 500 and status_code != 429:
+            return False
+        return True
+    msg = str(exc).lower()
+    if any(token in msg for token in ("overloaded", "timeout", "connection", "rate limit")):
+        return True
+    return True
+
+
+def _call_with_retry(
+    fn,
+    *,
+    max_attempts: int = 5,
+    base_delay: float = 1.0,
+    cap_delay: float = 60.0,
+):
+    """Invoke ``fn()`` with exponential backoff + jitter for recoverable errors.
+
+    ``delay = min(cap_delay, base_delay * 2**attempt) + uniform(0, 1)``.
+    Non-recoverable errors raise immediately. After ``max_attempts``
+    exhausted retries the last exception is re-raised.
+    """
+    import random
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_recoverable_api_error(exc) or attempt + 1 >= max_attempts:
+                raise
+            delay = min(cap_delay, base_delay * (2 ** attempt)) + random.uniform(0, 1)
+            logger.info(
+                "API call failed (attempt %d/%d, retryable=%s): %s — sleeping %.1fs",
+                attempt + 1, max_attempts, True, exc, delay,
+            )
+            time.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("_call_with_retry exhausted without exception")
+
+
+class CostTracker:
+    """Provider-specific token parsing + USD cost calculation."""
+
+    TOKENS_PER_MILLION = 1_000_000
+
+    @staticmethod
+    def _norm_model(model_name: str) -> str:
+        return (model_name or "").strip().lower()
+
+    @staticmethod
+    def _get(obj: Any, key: str, default: Any = 0) -> Any:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    @classmethod
+    def supports_openai(cls, model_name: str) -> bool:
+        return cls._norm_model(model_name) in MODEL_PRICING_REGISTRY and "gpt" in cls._norm_model(model_name)
+
+    @classmethod
+    def supports_anthropic(cls, model_name: str) -> bool:
+        return cls._norm_model(model_name) in ["claude-opus-4-6", "claude-sonnet-4-6"]
+
+    @classmethod
+    def supports_gemini(cls, model_name: str) -> bool:
+        return cls._norm_model(model_name) == "gemini-3.1-pro-preview"
+
+    @classmethod
+    def get_pricing(cls, model_name: str) -> Dict[str, float | None]:
+        model_lower = cls._norm_model(model_name)
+        pricing = MODEL_PRICING_REGISTRY.get(model_lower)
+        if not pricing:
+            raise KeyError(f"No pricing configured for model: {model_name}")
+        return pricing
+
+    @classmethod
+    def track_openai(cls, usage: Any, model_name: str) -> Dict[str, Any] | None:
+        if not cls.supports_openai(model_name):
+            return None
+        pricing = cls.get_pricing(model_name)
+
+        # Responses API uses input_tokens/output_tokens;
+        # Chat Completions uses prompt_tokens/completion_tokens.
+        prompt_tokens = cls._get(usage, "input_tokens", None)
+        if prompt_tokens is None:
+            prompt_tokens = cls._get(usage, "prompt_tokens", 0)
+        prompt_tokens = int(prompt_tokens or 0)
+
+        details = cls._get(usage, "input_tokens_details", None) or cls._get(usage, "prompt_tokens_details", None)
+        cached_input_tokens = int(cls._get(details, "cached_tokens", 0) or 0)
+
+        completion_tokens = cls._get(usage, "output_tokens", None)
+        if completion_tokens is None:
+            completion_tokens = cls._get(usage, "completion_tokens", 0)
+        completion_tokens = int(completion_tokens or 0)
+
+        out_details = cls._get(usage, "output_tokens_details", None) or cls._get(usage, "completion_tokens_details", None)
+        reasoning_tokens = int(cls._get(out_details, "reasoning_tokens", 0) or 0)
+
+        uncached_input_tokens = max(prompt_tokens - cached_input_tokens, 0)
+
+        cached_price = float(pricing.get("cached_input", pricing["input"]))
+        cost_input_uncached_usd = (uncached_input_tokens / cls.TOKENS_PER_MILLION) * float(pricing["input"])
+        cost_input_cached_usd = (cached_input_tokens / cls.TOKENS_PER_MILLION) * cached_price
+
+        # reasoning_tokens are already included in completion_tokens — do not double-count.
+        cost_output_usd = (completion_tokens / cls.TOKENS_PER_MILLION) * float(pricing["output"])
+        total_cost_usd = cost_input_uncached_usd + cost_input_cached_usd + cost_output_usd
+
+        return {
+            "provider": "openai",
+            "model": model_name,
+            "tokens": {
+                "prompt_tokens": prompt_tokens,
+                "cached_input_tokens": cached_input_tokens,
+                "uncached_input_tokens": uncached_input_tokens,
+                "completion_tokens": completion_tokens,
+                "reasoning_tokens": reasoning_tokens,
+            },
+            "cost_breakdown_usd": {
+                "input_uncached_usd": cost_input_uncached_usd,
+                "input_cached_usd": cost_input_cached_usd,
+                "output_usd": cost_output_usd,
+            },
+            "total_cost_usd": total_cost_usd,
+        }
+
+    @classmethod
+    def track_anthropic(cls, usage: Any, model_name: str) -> Dict[str, Any] | None:
+        if not cls.supports_anthropic(model_name):
+            return None
+        pricing = cls.get_pricing(model_name)
+
+        input_tokens = int(cls._get(usage, "input_tokens", 0) or 0)
+        cache_write_tokens = int(cls._get(usage, "cache_creation_input_tokens", 0) or 0)
+        cache_read_tokens = int(cls._get(usage, "cache_read_input_tokens", 0) or 0)
+        output_tokens = int(cls._get(usage, "output_tokens", 0) or 0)
+
+        logger.debug(
+            "Anthropic raw usage: input=%d cache_write=%d cache_read=%d output=%d",
+            input_tokens, cache_write_tokens, cache_read_tokens, output_tokens,
+        )
+
+        cost_input_usd = (input_tokens / cls.TOKENS_PER_MILLION) * float(pricing["input"])
+        cost_cache_write_usd = (cache_write_tokens / cls.TOKENS_PER_MILLION) * float(pricing["cache_write"])
+        cost_cache_read_usd = (cache_read_tokens / cls.TOKENS_PER_MILLION) * float(pricing["cache_read"])
+        cost_output_usd = (output_tokens / cls.TOKENS_PER_MILLION) * float(pricing["output"])
+        total_cost_usd = cost_input_usd + cost_cache_write_usd + cost_cache_read_usd + cost_output_usd
+
+        return {
+            "provider": "anthropic",
+            "model": model_name,
+            "tokens": {
+                "input_tokens": input_tokens,
+                "cache_write_input_tokens": cache_write_tokens,
+                "cache_read_input_tokens": cache_read_tokens,
+                "output_tokens": output_tokens,
+            },
+            "cost_breakdown_usd": {
+                "input_usd": cost_input_usd,
+                "cache_write_usd": cost_cache_write_usd,
+                "cache_read_usd": cost_cache_read_usd,
+                "output_usd": cost_output_usd,
+            },
+            "total_cost_usd": total_cost_usd,
+        }
+
+    @classmethod
+    def track_gemini(cls, response: Any, model_name: str) -> Dict[str, Any] | None:
+        if not cls.supports_gemini(model_name):
+            return None
+        pricing = cls.get_pricing(model_name)
+
+        usage_metadata = cls._get(response, "usage_metadata", None) or cls._get(response, "usageMetadata", None)
+        if usage_metadata is None:
+            return None
+
+        prompt_token_count = cls._get(usage_metadata, "prompt_token_count", None)
+        if prompt_token_count is None:
+            prompt_token_count = cls._get(usage_metadata, "promptTokenCount", 0)
+
+        cached_content_token_count = cls._get(usage_metadata, "cached_content_token_count", None)
+        if cached_content_token_count is None:
+            cached_content_token_count = cls._get(usage_metadata, "cachedContentTokenCount", 0)
+
+        candidates_token_count = cls._get(usage_metadata, "candidates_token_count", None)
+        if candidates_token_count is None:
+            candidates_token_count = cls._get(usage_metadata, "candidatesTokenCount", 0)
+
+        cached_input_tokens = int(cached_content_token_count or 0)
+        prompt_tokens = int(prompt_token_count or 0)
+        uncached_input_tokens = max(prompt_tokens - cached_input_tokens, 0)
+        output_tokens = int(candidates_token_count or 0)
+
+        # Tiered pricing: >200K context tokens uses the higher tier
+        over_200k = prompt_tokens > 200_000
+        input_price = float(pricing.get("input_over_200k", pricing["input"]) if over_200k else pricing["input"])
+        cached_price = float(pricing.get("cached_input_over_200k", pricing["cached_input"]) if over_200k else pricing["cached_input"])
+        output_price = float(pricing.get("output_over_200k", pricing["output"]) if over_200k else pricing["output"])
+
+        cost_input_uncached_usd = (uncached_input_tokens / cls.TOKENS_PER_MILLION) * input_price
+        cost_input_cached_usd = (cached_input_tokens / cls.TOKENS_PER_MILLION) * cached_price
+        cost_output_usd = (output_tokens / cls.TOKENS_PER_MILLION) * output_price
+        total_cost_usd = cost_input_uncached_usd + cost_input_cached_usd + cost_output_usd
+
+        return {
+            "provider": "gemini",
+            "model": model_name,
+            "tokens": {
+                "prompt_token_count": prompt_tokens,
+                "cached_content_token_count": cached_input_tokens,
+                "uncached_input_tokens": uncached_input_tokens,
+                "candidates_token_count": output_tokens,
+            },
+            "pricing_tier": ">200k" if over_200k else "<=200k",
+            "cost_breakdown_usd": {
+                "input_uncached_usd": cost_input_uncached_usd,
+                "input_cached_usd": cost_input_cached_usd,
+                "output_usd": cost_output_usd,
+            },
+            "total_cost_usd": total_cost_usd,
+        }
+
+
+def format_tools_as_text(tools: List[Dict[str, Any]]) -> str:
+    """Convert OpenAI tool schema to text description for Qwen3-VL models.
+    
+    Args:
+        tools: List of tool definitions in OpenAI format
+        
+    Returns:
+        Formatted text description of all tools
+    """
+    tool_descriptions = []
+    
+    for tool in tools:
+        func = tool.get("function", {})
+        name = func.get("name", "")
+        description = func.get("description", "")
+        parameters = func.get("parameters", {})
+        properties = parameters.get("properties", {})
+        required = parameters.get("required", [])
+        
+        # Build parameter descriptions
+        param_descriptions = []
+        for param_name, param_info in properties.items():
+            param_type = param_info.get("type", "string")
+            param_desc = param_info.get("description", "")
+            param_enum = param_info.get("enum")
+            param_default = param_info.get("default")
+            
+            param_str = f"  - {param_name} ({param_type})"
+            if param_desc:
+                param_str += f": {param_desc}"
+            if param_enum:
+                param_str += f" [options: {', '.join(map(str, param_enum))}]"
+            if param_default is not None:
+                param_str += f" [default: {param_default}]"
+            if param_name in required:
+                param_str += " [required]"
+            
+            param_descriptions.append(param_str)
+        
+        # Format tool description
+        tool_text = f"- {name}: {description}"
+        if param_descriptions:
+            tool_text += "\n" + "\n".join(param_descriptions)
+        
+        tool_descriptions.append(tool_text)
+    
+    return "\n\n".join(tool_descriptions)
+
+
+# Unified agent prompts
+UNIFIED_INITIAL_PROMPT_TEMPLATE = """
+You are a powerful AI agent operating on a unified digital workstation (uda-desktop). You can control any GUI application visually via pixel-level computer-use actions, execute shell commands, manipulate files, and run Python code to solve complex, multi-domain tasks.
+
+Task:
+{instruction}
+
+## Thinking Protocol
+
+Before EVERY action, output a `Thought:` section explaining what you're about to do and why.
+
+## Available Tools
+
+### Computer-Use Tools (pixel-level GUI control via uda-desktop)
+
+You drive any GUI application — web browsers (Chromium), native apps (VS Code, LibreOffice,
+GIMP, file manager, terminal …), system dialogs, the XFCE desktop — through the Anthropic
+Computer Tool action set on `/v1/computer-use/*`. There is **no DOM, no selectors, no
+BIDs**. Coordinates are integer pixels in the X11 root window, `(0, 0)` is the top-left.
+Most actions auto-attach a fresh screenshot in `base64_image` so you can verify the result.
+
+**Observation (always do this before clicking unfamiliar UI):**
+- `computer_use_screenshot()` — capture the whole screen as a base64 PNG.
+- `computer_use_zoom(region=[x0, y0, x1, y1])` — crop a sub-region for detail; useful when
+  a target is too small to locate accurately.
+- `computer_use_cursor_position()` — report `(x, y)` of the current mouse cursor.
+
+**Mouse:**
+- `computer_use_mouse_move(coordinate=[x, y])` — move pointer without clicking.
+- `computer_use_left_click(coordinate?=[x, y], key?="ctrl")` — left-click. Both arguments
+  are optional: omit `coordinate` to click at the current cursor; pass `key` (xdotool
+  keysym like "ctrl", "shift", "alt", "super") to hold a modifier during the click.
+- `computer_use_right_click(coordinate?, key?)` — same signature; opens context menus.
+- `computer_use_middle_click(coordinate?, key?)` — same.
+- `computer_use_double_click(coordinate?, key?)` — double-click (e.g. open file from icon).
+- `computer_use_triple_click(coordinate?, key?)` — triple-click (selects a line/paragraph
+  in most editors).
+- `computer_use_left_click_drag(start_coordinate=[x, y], coordinate=[x, y])` — press
+  left at `start_coordinate`, drag, release at `coordinate`. Use for text selection,
+  sliders, drag-and-drop, window moves.
+- `computer_use_left_mouse_down()` / `computer_use_left_mouse_up()` — compose manual
+  drags when you need to interleave `mouse_move` between press and release.
+
+**Keyboard:**
+- `computer_use_key(text="<keysym>")` — single key or chord using xdotool syntax
+  (e.g. `"Return"`, `"Escape"`, `"Tab"`, `"ctrl+c"`, `"ctrl+shift+t"`, `"super+l"`).
+- `computer_use_type(text="...")` — type a UTF-8 string into the focused window.
+  Click into the target text field first to give it focus.
+- `computer_use_hold_key(text="<keysym>", duration=<seconds>)` — press, sleep, release.
+  Useful for game-style holds or sticky modifiers.
+
+**Scroll / Wait:**
+- `computer_use_scroll(scroll_direction="up"|"down"|"left"|"right", scroll_amount=<int>,
+  coordinate?=[x, y], text?="<modifier>")` — N wheel ticks in a direction. Pass
+  `text="ctrl"` for ctrl-scroll (zoom in / out in most apps).
+- `computer_use_wait(duration=<seconds>)` — sleep then auto-screenshot. Use for animations
+  / loading dialogs settling before you act.
+
+### File Tools
+- `file_read(path)`: Read file content
+- `file_write(path, content)`: Write content to file
+- `file_list(path)`: List files in directory
+- `replace_in_file(file, old_text, new_text)`: Replace text in file
+- `search_in_file(file, pattern)`: Search for pattern in file
+- `find_files(path, glob)`: Find files matching glob pattern
+- `image_read(path)`: Read image files (PNG, JPG, etc.) and return as base64-encoded images for visual analysis
+- `str_replace_editor(command, path, ...)`: Powerful file editing with view/create/replace/insert/undo
+
+**Note**: All file paths are relative to `/home/kasm-user/` (the sandbox root directory).
+
+### Code Execution Tools
+- `code_execute(code, language?, timeout?)`: Run code via sandbox runtime (python default); returns stdout/stderr
+- **Note**: Working directory is `/home/kasm-user/`
+
+### Shell Tools
+- `shell_execute(command)`: Execute bash commands in the sandbox
+- **Note**: Working directory is `/home/kasm-user/`
+
+### Task Management
+- `task_complete(result?)`: Mark task as complete. **MUST** call this when finished.
+  - If task requires returning a specific output, pass it as `result` parameter: `task_complete(result="your_answer")`
+  - If task generates files or has no specific output, call `task_complete()` without parameters
+
+## Tool-Specific Guidelines
+
+### Computer-Use Tools Guidelines
+
+#### (a) Observe before acting
+- **Take `computer_use_screenshot` BEFORE the first GUI action of any subtask.** GUI
+  state is opaque without a fresh frame. After significant actions, take another
+  screenshot to verify the action took effect.
+- Estimate target pixel coordinates by reading the screenshot. If a click misses (no
+  visible change after 1–2 tries), use `computer_use_zoom(region=...)` to crop the
+  relevant area and re-estimate.
+- Coordinates are integer pixels in the X11 root window with `(0, 0)` at the top-left.
+  At default resolution `1920×1080` (call `/v1/computer-use/health` to confirm), the
+  bottom-right is `(1919, 1079)`.
+
+#### (b) Pattern recipes
+- **Open file via icon double-click:** `computer_use_double_click(coordinate=[icon_xy])`.
+- **Type into a text field:** click into the field first to focus, then
+  `computer_use_type(text="...")`. Never type without first focusing the target.
+- **Submit form:** after typing, `computer_use_key(text="Return")` (or click the submit
+  button).
+- **Dismiss dialog / popup:** `computer_use_key(text="Escape")` first; if that fails,
+  visually locate the close (X) button and click it.
+- **Drag slider / window:** `computer_use_left_click_drag(start_coordinate=[knob],
+  coordinate=[target])`.
+- **Open right-click context menu:** `computer_use_right_click(coordinate=[x, y])`, then
+  click a menu item.
+- **Modifier-click (Ctrl+click, Shift+click):**
+  `computer_use_left_click(coordinate=[x, y], key="ctrl")`.
+- **Bring off-screen content into view:**
+  `computer_use_scroll(scroll_direction="down", scroll_amount=3)`.
+- **Switch apps / launch via keyboard:** `computer_use_key(text="super")` opens the
+  XFCE app menu; `computer_use_key(text="alt+Tab")` cycles windows.
+
+#### (c) When pixel control isn't the right tool
+- For batch file ops, downloads, computation, parsing, or any action with a programmatic
+  interface, **prefer `shell_execute` or `code_execute` over chained GUI clicks**. Computer-use
+  is for visual / interactive work that genuinely has no API.
+- Reading file contents: `file_read` or `shell_execute("cat path")`, not screenshotting a
+  text editor.
+- Writing files: `file_write` or `shell_execute("echo ... > path")`, not typing into a GUI editor.
+
+#### (d) Failure recovery
+- **Click did nothing** after one retry: `computer_use_zoom` into the target area and
+  re-read coordinates; you may be off by tens of pixels.
+- **App didn't launch:** verify with `shell_execute("pgrep -af <app>")` or check stderr
+  via `shell_execute("tail /var/log/...")`.
+- **Modal blocks workflow:** `computer_use_key(text="Escape")` first; then look for an X
+  close button visually.
+- **Cursor seems stuck / invisible:** take a fresh screenshot; sometimes an explicit
+  `computer_use_mouse_move(coordinate=[100, 100])` refreshes the pointer.
+- **After ~6 consecutive GUI actions without verified progress:** switch strategy —
+  drop to `shell_execute` / `code_execute`, or document the blocker via
+  `task_complete(result="failure_summary: ...")`.
+
+**No Fabrication:**
+- Never invent URLs, filenames, or data.
+- Never use placeholder domains (example.com) as actual inputs.
+- If a required resource cannot be found, document what you searched, attach screenshot
+  evidence, and report the gap rather than hallucinating an answer.
+
+### Code & Shell Tools Guidelines
+- **Working directory**: Always `/home/kasm-user/`
+- Use relative paths from `/home/kasm-user/` or absolute paths starting with `/home/kasm-user/`
+- For file operations, remember root is `/home/kasm-user/`
+- **CRITICAL - Avoid large outputs in code execution:**
+  - **NEVER** use `print()` or any other method to output base64-encoded data, raw image bytes, or large binary strings in `code_execute`. This will flood the output and may exceed API length limits.
+  - **NEVER** print, display, or return image pixel arrays (e.g., `np.array(img)`), raw image data, or base64 strings.
+  - **NEVER** use `plt.show()`, `display()`, `Image.show()`, or `repr()` on image objects in `code_execute` — these produce huge outputs.
+  - When processing images in code, only print short metadata (e.g., file size, dimensions, format) — never the image content itself.
+  - To **view** or **analyze** an image visually, always use the `image_read(path)` tool instead of code.
+
+## Cross-Tool Workflow Guidelines
+
+### Download Workflow
+1. **Identify the download target:**
+   - Take `computer_use_screenshot` to find the download link / button visually.
+   - If a direct URL is visible, prefer fetching it programmatically.
+
+2. **Download file:**
+   - **STRONGLY PREFER** `shell_execute` (wget / curl) or `code_execute` (requests) over
+     clicking download buttons.
+     - Using shell: `shell_execute("wget -O /home/kasm-user/file.pdf https://example.com/file.pdf")`
+     - Using code:
+       ```python
+       import requests
+       url = "https://example.com/file.pdf"
+       response = requests.get(url)
+       with open("/home/kasm-user/file.pdf", "wb") as f:
+           f.write(response.content)
+       ```
+   - Only fall back to clicking a GUI download button (`computer_use_left_click`) when
+     the URL is behind JS or session state that a fetch can't replicate.
+
+3. **Verify download:**
+   - Use `file_list("/home/kasm-user")` or `shell_execute("ls -lh /home/kasm-user/file.pdf")` to verify file exists
+   - Use `file_read` or `code_execute` to verify file content/parsability
+
+### File Verification
+- After saving any file, verify:
+  - File exists: `file_list(path)` or `shell_execute("test -f /home/kasm-user/path && echo exists")`
+  - File size > 0: `shell_execute("stat -c%s /home/kasm-user/path")`
+  - For PDFs/documents: Parse via `code_execute` to confirm expected sections exist
+
+### Using Code to Implement Missing Capabilities
+- If needed operation not supported by tools:
+  - Implement helper in `code_execute`
+  - Verify output before using
+  - Examples: advanced parsing, OCR, link discovery, data extraction
+
+### Logging Progress
+- Record milestones to `/home/kasm-user/task_progress.txt`:
+  - Brief notes on what was accomplished
+  - Screenshot references used for decisions
+  - File paths created/modified
+
+### Failure Reporting
+- If subtask cannot be completed after reasonable attempts:
+  - Document: actions tried, screenshot references, why each failed
+  - Suggest next steps or request human input
+  - Include in `task_complete(result="failure_summary")` if task fails
+
+## Critical Reminders
+
+1. **Screenshot before acting**: take `computer_use_screenshot` before any GUI action to verify state and target coordinates.
+2. **Screenshot after acting**: take another to confirm the action took effect.
+3. **Prefer `shell_execute` / `code_execute` for non-GUI work** (file I/O, computation, network fetches) — don't click your way through programmatic tasks.
+4. **Remember working directory** is `/home/kasm-user/` for all file/code/shell operations.
+5. **Download files programmatically** via `shell_execute` (wget/curl) or `code_execute`, not by clicking download buttons.
+6. **Verify all file operations** (existence, size, content).
+7. **MUST call `task_complete`** when finished, with `result=...` if a specific output is required.
+8. **No fabrication** — never invent URLs, filenames, or data.
+9. **Stop after ~6 failed GUI actions** without verified progress — switch strategy (shell / code / abort) or request help.
+10. **Use `image_read` for images**: When you need to view or analyze a downloaded image, use the `image_read` tool. **DO NOT** use `code_execute` to display, print, or inspect images (e.g., via matplotlib `plt.show()`, PIL `Image.show()`, printing numpy arrays, or any operation that outputs base64/binary data). These produce extremely large outputs that exceed API length limits and break the conversation. If you need image metadata (size, format, mode), print ONLY those short strings — never the image content or pixel data.
+"""
+
+UNIFIED_FEEDBACK_PROMPT_TEMPLATE = """
+Your previous actions have been executed. Here is the feedback:
+
+{feedback}
+
+Based on the feedback and your progress toward the goal, determine the next actions to take. You can call multiple tools in sequence.
+
+Remember:
+- Analyze what has been accomplished and what remains
+- Use the appropriate tools (browser, file, code, shell) for each subtask
+- For downloading files: prefer `shell_execute` (wget/curl) or `code_execute` over on-screen clicks
+- Verify results when necessary
+- **CRITICAL**: When you have the final answer or result, you MUST call `task_complete` to finish the task
+  - If the task requires returning a specific output (e.g., JSON answer, text answer), pass it as the 'result' parameter: `task_complete(result="your_answer")`
+  - If the task generates files in the sandbox (no specific output required), call `task_complete()` without parameters
+  - If the task failed after reasonable attempts, call `task_complete(result="failure_summary: ...")` with a summary of what was tried and why it failed
+- Call `task_complete` when the entire task is finished - this is mandatory
+"""
+
+
+UNIFIED_INITIAL_PROMPT_TEMPLATE_QWEN3VL = """
+You are a powerful AI agent operating on a unified digital workstation (uda-desktop). You can control any GUI application visually via pixel-level computer-use actions, execute shell commands, manipulate files, and run Python code to solve complex, multi-domain tasks.
+
+Task:
+{instruction}
+
+{tools_description}
+
+## Available Tools
+
+### Computer-Use Tools (pixel-level GUI control via uda-desktop)
+
+You drive any GUI application — web browsers (Chromium), native apps (VS Code, LibreOffice,
+GIMP, file manager, terminal …), system dialogs, the XFCE desktop — through the Anthropic
+Computer Tool action set on `/v1/computer-use/*`. There is **no DOM, no selectors, no
+BIDs**. Coordinates are integer pixels in the X11 root window, `(0, 0)` is the top-left.
+Most actions auto-attach a fresh screenshot in `base64_image` so you can verify the result.
+
+**Observation (always do this before clicking unfamiliar UI):**
+- `computer_use_screenshot()` — capture the whole screen as a base64 PNG.
+- `computer_use_zoom(region=[x0, y0, x1, y1])` — crop a sub-region for detail; useful when
+  a target is too small to locate accurately.
+- `computer_use_cursor_position()` — report `(x, y)` of the current mouse cursor.
+
+**Mouse:**
+- `computer_use_mouse_move(coordinate=[x, y])` — move pointer without clicking.
+- `computer_use_left_click(coordinate?=[x, y], key?="ctrl")` — left-click. Both arguments
+  are optional: omit `coordinate` to click at the current cursor; pass `key` (xdotool
+  keysym like "ctrl", "shift", "alt", "super") to hold a modifier during the click.
+- `computer_use_right_click(coordinate?, key?)` — same signature; opens context menus.
+- `computer_use_middle_click(coordinate?, key?)` — same.
+- `computer_use_double_click(coordinate?, key?)` — double-click (e.g. open file from icon).
+- `computer_use_triple_click(coordinate?, key?)` — triple-click (selects a line/paragraph
+  in most editors).
+- `computer_use_left_click_drag(start_coordinate=[x, y], coordinate=[x, y])` — press
+  left at `start_coordinate`, drag, release at `coordinate`. Use for text selection,
+  sliders, drag-and-drop, window moves.
+- `computer_use_left_mouse_down()` / `computer_use_left_mouse_up()` — compose manual
+  drags when you need to interleave `mouse_move` between press and release.
+
+**Keyboard:**
+- `computer_use_key(text="<keysym>")` — single key or chord using xdotool syntax
+  (e.g. `"Return"`, `"Escape"`, `"Tab"`, `"ctrl+c"`, `"ctrl+shift+t"`, `"super+l"`).
+- `computer_use_type(text="...")` — type a UTF-8 string into the focused window.
+  Click into the target text field first to give it focus.
+- `computer_use_hold_key(text="<keysym>", duration=<seconds>)` — press, sleep, release.
+  Useful for game-style holds or sticky modifiers.
+
+**Scroll / Wait:**
+- `computer_use_scroll(scroll_direction="up"|"down"|"left"|"right", scroll_amount=<int>,
+  coordinate?=[x, y], text?="<modifier>")` — N wheel ticks in a direction. Pass
+  `text="ctrl"` for ctrl-scroll (zoom in / out in most apps).
+- `computer_use_wait(duration=<seconds>)` — sleep then auto-screenshot. Use for animations
+  / loading dialogs settling before you act.
+
+### File Tools
+- `file_read(path)`: Read file content
+- `file_write(path, content)`: Write content to file
+- `file_list(path)`: List files in directory
+- `replace_in_file(file, old_text, new_text)`: Replace text in file
+- `search_in_file(file, pattern)`: Search for pattern in file
+- `find_files(path, glob)`: Find files matching glob pattern
+- `image_read(path)`: Read image files (PNG, JPG, etc.) and return as base64-encoded images for visual analysis
+- `str_replace_editor(command, path, ...)`: Powerful file editing with view/create/replace/insert/undo
+
+**Note**: All file paths are relative to `/home/kasm-user/` (the sandbox root directory).
+
+### Code Execution Tools
+- `code_execute(code, language?, timeout?)`: Run code via sandbox runtime (python default); returns stdout/stderr
+- **Note**: Working directory is `/home/kasm-user/`
+
+### Shell Tools
+- `shell_execute(command)`: Execute bash commands in the sandbox
+- **Note**: Working directory is `/home/kasm-user/`
+
+### Task Management
+- `task_complete(result?)`: Mark task as complete. **MUST** call this when finished.
+  - If task requires returning a specific output, pass it as `result` parameter: `task_complete(result="your_answer")`
+  - If task generates files or has no specific output, call `task_complete()` without parameters
+
+## Tool-Specific Guidelines
+
+### Computer-Use Tools Guidelines
+
+#### (a) Observe before acting
+- **Take `computer_use_screenshot` BEFORE the first GUI action of any subtask.** GUI
+  state is opaque without a fresh frame. After significant actions, take another
+  screenshot to verify the action took effect.
+- Estimate target pixel coordinates by reading the screenshot. If a click misses (no
+  visible change after 1–2 tries), use `computer_use_zoom(region=...)` to crop the
+  relevant area and re-estimate.
+- Coordinates are integer pixels in the X11 root window with `(0, 0)` at the top-left.
+  At default resolution `1920×1080` (call `/v1/computer-use/health` to confirm), the
+  bottom-right is `(1919, 1079)`.
+
+#### (b) Pattern recipes
+- **Open file via icon double-click:** `computer_use_double_click(coordinate=[icon_xy])`.
+- **Type into a text field:** click into the field first to focus, then
+  `computer_use_type(text="...")`. Never type without first focusing the target.
+- **Submit form:** after typing, `computer_use_key(text="Return")` (or click the submit
+  button).
+- **Dismiss dialog / popup:** `computer_use_key(text="Escape")` first; if that fails,
+  visually locate the close (X) button and click it.
+- **Drag slider / window:** `computer_use_left_click_drag(start_coordinate=[knob],
+  coordinate=[target])`.
+- **Open right-click context menu:** `computer_use_right_click(coordinate=[x, y])`, then
+  click a menu item.
+- **Modifier-click (Ctrl+click, Shift+click):**
+  `computer_use_left_click(coordinate=[x, y], key="ctrl")`.
+- **Bring off-screen content into view:**
+  `computer_use_scroll(scroll_direction="down", scroll_amount=3)`.
+- **Switch apps / launch via keyboard:** `computer_use_key(text="super")` opens the
+  XFCE app menu; `computer_use_key(text="alt+Tab")` cycles windows.
+
+#### (c) When pixel control isn't the right tool
+- For batch file ops, downloads, computation, parsing, or any action with a programmatic
+  interface, **prefer `shell_execute` or `code_execute` over chained GUI clicks**. Computer-use
+  is for visual / interactive work that genuinely has no API.
+- Reading file contents: `file_read` or `shell_execute("cat path")`, not screenshotting a
+  text editor.
+- Writing files: `file_write` or `shell_execute("echo ... > path")`, not typing into a GUI editor.
+
+#### (d) Failure recovery
+- **Click did nothing** after one retry: `computer_use_zoom` into the target area and
+  re-read coordinates; you may be off by tens of pixels.
+- **App didn't launch:** verify with `shell_execute("pgrep -af <app>")` or check stderr
+  via `shell_execute("tail /var/log/...")`.
+- **Modal blocks workflow:** `computer_use_key(text="Escape")` first; then look for an X
+  close button visually.
+- **Cursor seems stuck / invisible:** take a fresh screenshot; sometimes an explicit
+  `computer_use_mouse_move(coordinate=[100, 100])` refreshes the pointer.
+- **After ~6 consecutive GUI actions without verified progress:** switch strategy —
+  drop to `shell_execute` / `code_execute`, or document the blocker via
+  `task_complete(result="failure_summary: ...")`.
+
+**No Fabrication:**
+- Never invent URLs, filenames, or data.
+- Never use placeholder domains (example.com) as actual inputs.
+- If a required resource cannot be found, document what you searched, attach screenshot
+  evidence, and report the gap rather than hallucinating an answer.
+
+### Code & Shell Tools Guidelines
+- **Working directory**: Always `/home/kasm-user/`
+- Use relative paths from `/home/kasm-user/` or absolute paths starting with `/home/kasm-user/`
+- For file operations, remember root is `/home/kasm-user/`
+- **CRITICAL - Avoid large outputs in code execution:**
+  - **NEVER** use `print()` or any other method to output base64-encoded data, raw image bytes, or large binary strings in `code_execute`. This will flood the output and may exceed API length limits.
+  - **NEVER** print, display, or return image pixel arrays (e.g., `np.array(img)`), raw image data, or base64 strings.
+  - **NEVER** use `plt.show()`, `display()`, `Image.show()`, or `repr()` on image objects in `code_execute` — these produce huge outputs.
+  - When processing images in code, only print short metadata (e.g., file size, dimensions, format) — never the image content itself.
+  - To **view** or **analyze** an image visually, always use the `image_read(path)` tool instead of code.
+
+## Cross-Tool Workflow Guidelines
+
+### Download Workflow
+1. **Identify the download target:**
+   - Take `computer_use_screenshot` to find the download link / button visually.
+   - If a direct URL is visible, prefer fetching it programmatically.
+
+2. **Download file:**
+   - **STRONGLY PREFER** `shell_execute` (wget / curl) or `code_execute` (requests) over
+     clicking download buttons.
+     - Using shell: `shell_execute("wget -O /home/kasm-user/file.pdf https://example.com/file.pdf")`
+     - Using code:
+       ```python
+       import requests
+       url = "https://example.com/file.pdf"
+       response = requests.get(url)
+       with open("/home/kasm-user/file.pdf", "wb") as f:
+           f.write(response.content)
+       ```
+   - Only fall back to clicking a GUI download button (`computer_use_left_click`) when
+     the URL is behind JS or session state that a fetch can't replicate.
+
+3. **Verify download:**
+   - Use `file_list("/home/kasm-user")` or `shell_execute("ls -lh /home/kasm-user/file.pdf")` to verify file exists
+   - Use `file_read` or `code_execute` to verify file content/parsability
+
+### File Verification
+- After saving any file, verify:
+  - File exists: `file_list(path)` or `shell_execute("test -f /home/kasm-user/path && echo exists")`
+  - File size > 0: `shell_execute("stat -c%s /home/kasm-user/path")`
+  - For PDFs/documents: Parse via `code_execute` to confirm expected sections exist
+
+### Using Code to Implement Missing Capabilities
+- If needed operation not supported by tools:
+  - Implement helper in `code_execute`
+  - Verify output before using
+  - Examples: advanced parsing, OCR, link discovery, data extraction
+
+### Logging Progress
+- Record milestones to `/home/kasm-user/task_progress.txt`:
+  - Brief notes on what was accomplished
+  - Screenshot references used for decisions
+  - File paths created/modified
+
+### Failure Reporting
+- If subtask cannot be completed after reasonable attempts:
+  - Document: actions tried, screenshot references, why each failed
+  - Suggest next steps or request human input
+  - Include in `task_complete(result="failure_summary")` if task fails
+
+## Tool Call Format
+
+To call a tool, use this format:
+<tool_call>
+{{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+</tool_call>
+
+## Critical Reminders
+
+1. **Screenshot before acting**: take `computer_use_screenshot` before any GUI action to verify state and target coordinates.
+2. **Screenshot after acting**: take another to confirm the action took effect.
+3. **Prefer `shell_execute` / `code_execute` for non-GUI work** (file I/O, computation, network fetches) — don't click your way through programmatic tasks.
+4. **Remember working directory** is `/home/kasm-user/` for all file/code/shell operations.
+5. **Download files programmatically** via `shell_execute` (wget/curl) or `code_execute`, not by clicking download buttons.
+6. **Verify all file operations** (existence, size, content).
+7. **MUST call `task_complete`** when finished, with `result=...` if a specific output is required.
+8. **No fabrication** — never invent URLs, filenames, or data.
+9. **Stop after ~6 failed GUI actions** without verified progress — switch strategy (shell / code / abort) or request help.
+10. **Use `image_read` for images**: When you need to view or analyze a downloaded image, use the `image_read` tool. **DO NOT** use `code_execute` to display, print, or inspect images (e.g., via matplotlib `plt.show()`, PIL `Image.show()`, printing numpy arrays, or any operation that outputs base64/binary data). These produce extremely large outputs that exceed API length limits and break the conversation. If you need image metadata (size, format, mode), print ONLY those short strings — never the image content or pixel data.
+
+## Summary
+Act visually, verify rigorously, and avoid blind exploration. Prefer one extra screenshot + VLM judgement before any ambiguous click.
+"""
+
+UNIFIED_FEEDBACK_PROMPT_TEMPLATE_QWEN3VL = """
+Your previous actions have been executed. Here is the feedback:
+
+{feedback}
+
+Based on the feedback and your progress toward the goal, determine the next actions to take. You can call multiple tools in sequence.
+
+Remember:
+- Analyze what has been accomplished and what remains
+- Use the appropriate tools (browser, file, code, shell) for each subtask
+- For downloading files: prefer `shell_execute` (wget/curl) or `code_execute` over on-screen clicks
+- Verify results when necessary
+- **CRITICAL**: When you have the final answer or result, you MUST call `task_complete` to finish the task
+  - If the task requires returning a specific output (e.g., JSON answer, text answer), pass it as the 'result' parameter: `task_complete(result="your_answer")`
+  - If the task generates files in the sandbox (no specific output required), call `task_complete()` without parameters
+  - If the task failed after reasonable attempts, call `task_complete(result="failure_summary: ...")` with a summary of what was tried and why it failed
+- Call `task_complete` when the entire task is finished - this is mandatory
+- To call a tool, use the format: <tool_call>
+{{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+</tool_call>
+"""
+
+KIMI_RELATIVE_COORDINATE_INSTRUCTION = """
+## Kimi Coordinate Rule
+
+For computer-use actions that take a `coordinate` or `start_coordinate`, output normalized
+relative coordinates in `[0, 1]` instead of absolute pixels. The runtime will rescale them
+to the current screen resolution (see `/v1/computer-use/health` for live width × height).
+
+- For `computer_use_left_click(coordinate=[x, y], ...)`,
+  `computer_use_right_click`, `computer_use_double_click`,
+  `computer_use_mouse_move(coordinate=[x, y])`,
+  `computer_use_left_click_drag(start_coordinate=[x, y], coordinate=[x, y])`:
+  - `x` and `y` MUST be numbers in `[0, 1]`
+  - Interpret them relative to the current screenshot (top-left = (0, 0), bottom-right = (1, 1))
+  - Example: screen center is `(0.5, 0.5)`
+  - Do NOT output pixel coordinates like `670` or `830`
+- Before clicking, estimate coordinates from the screenshot and express them as normalized ratios.
+""".strip()
+
+
+class Controller:
+    """Base class for controllers that generate actions given a prompt."""
+
+    def call(self, prompt: str, message_history: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+        """Send a prompt and return the parsed action/response.
+
+        Args:
+            prompt: The prompt to send to the controller
+            message_history: Optional list of previous messages for context
+
+        Returns:
+            Dictionary with keys:
+            - command: The action/command to execute
+            - explanation: Brief explanation of what the command does
+        """
+        raise NotImplementedError("Not implemented")
+
+    def clear_history(self) -> None:
+        """Clear any stored conversation history."""
+        raise NotImplementedError("Not implemented")
+
+    def build_prompt(self, task_description: str = None, feedback: str = None) -> str:
+        """Build a prompt for the controller.
+
+        Args:
+            task_description: The task description
+            feedback: Feedback from previous iteration
+
+        Returns:
+            A formatted prompt string
+        """
+        raise NotImplementedError("Not implemented")
+
+    def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse controller's response into a structured format.
+
+        Args:
+            response: The controller's raw response
+
+        Returns:
+            Dictionary with command and explanation
+        """
+        raise NotImplementedError("Not implemented")
+
+    def get_history(self) -> List[Dict[str, str]]:
+        """Get the message history. Can be overridden by subclasses."""
+        return []
+
+    def add_tool_message(self, tool_call_id: str, content: str) -> None:
+        """Optional hook for controllers that maintain conversation history with tool outputs."""
+        return
+
+
+class BaseLLM(Controller):
+    """Base class for LLM controllers with common functionality."""
+    
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        """Initialize base LLM controller.
+        
+        Args:
+            llm_config: Configuration dictionary
+            client_type: Type of client (unified, browser, file, code, shell)
+            **kwargs: Additional keyword arguments
+        """
+        if llm_config is None:
+            llm_config = {}
+        
+        # Common attributes
+        self.model = llm_config.get("model", kwargs.get("model", ""))
+        self.messages: List[Dict[str, Any]] = []
+        self.last_think: str | None = None
+
+        # System prompt — set by start_task(); injected into the API request
+        # by each subclass's _make_api_call (OpenAI prepends a system message,
+        # Claude passes a `system=` param, Gemini passes system_instruction).
+        # Kept empty for the Qwen3-VL legacy path that bundles everything into
+        # a single user message.
+        self.system_prompt: str = ""
+
+        # Context-management knobs.
+        #
+        # ``history_window`` (sliding-window compaction over iteration blocks)
+        # defaults to **0 = OFF** — for RL training we don't want to drop
+        # middle iterations entirely, because the policy conditions on the
+        # full action history. Set >0 only when context length actually
+        # threatens to blow up (long agentic rollouts >50 iters).
+        #
+        # ``image_prune_*`` (StripImagesAtIntervals) defaults to ON with the
+        # best-practices interval scheme — this only swaps image bytes for an
+        # ``[Image Omitted]`` placeholder, so the *fact* of past observations
+        # is preserved while the prefix stays byte-stable for SGLang prefix
+        # cache.
+        self.history_window: int = int(
+            llm_config.get("history_window", kwargs.get("history_window", 0))
+        )
+        self.image_prune_min: int = int(
+            llm_config.get("image_prune_min", kwargs.get("image_prune_min", 3))
+        )
+        self.image_prune_interval: int = int(
+            llm_config.get("image_prune_interval", kwargs.get("image_prune_interval", 8))
+        )
+        # API-error retry policy. Exponential backoff with jitter — see
+        # _call_with_retry. Best-practices defaults: 5 attempts, 1s base.
+        self.api_retry_max_attempts: int = int(
+            llm_config.get("api_retry_max_attempts", kwargs.get("api_retry_max_attempts", 5))
+        )
+        self.api_retry_base_delay: float = float(
+            llm_config.get("api_retry_base_delay", kwargs.get("api_retry_base_delay", 1.0))
+        )
+        
+        # Cost tracking
+        self.total_cost: float = 0.0
+        self.total_input_tokens: int = 0
+        self.total_uncached_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cached_tokens: int = 0
+        self.total_reasoning_tokens: int = 0
+        self.total_cache_write_input_tokens: int = 0
+        self.total_cache_read_input_tokens: int = 0
+
+        # Cost component tracking (USD)
+        self.total_cost_input_uncached_usd: float = 0.0
+        self.total_cost_input_cached_usd: float = 0.0
+        self.total_cost_output_usd: float = 0.0
+        self.total_cost_cache_write_usd: float = 0.0
+        self.total_cost_cache_read_usd: float = 0.0
+        self.api_calls: int = 0
+        self.per_call_costs: list = []
+        
+        # Store client type and determine tool usage
+        self.client_type = client_type
+        self.use_tools = client_type in [
+            "computer_use", "computer-use", "browser",  # "browser" is a legacy alias
+            "file", "code", "jupyter", "shell", "unified",
+        ]
+        self.max_parse_retries = max(1, int(llm_config.get("max_parse_retries", 5)))
+
+        # Load appropriate tools based on client type
+        if self.use_tools:
+            from nanorollout.envs.uda_env.tools import (
+                get_code_tools,
+                get_computer_use_tools,
+                get_file_tools,
+                get_shell_tools,
+                get_unified_tools,
+            )
+            if client_type == "unified":
+                self.tools = get_unified_tools()
+            elif client_type in ("computer_use", "computer-use", "browser"):
+                self.tools = get_computer_use_tools()
+            elif client_type == "file":
+                self.tools = get_file_tools()
+            elif client_type == "code" or client_type == "jupyter":
+                self.tools = get_code_tools()
+            elif client_type == "shell":
+                self.tools = get_shell_tools()
+            else:
+                self.tools = None
+        else:
+            self.tools = None
+    
+    def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
+        """Prepare message content from prompt and images.
+        
+        Args:
+            prompt: Text prompt
+            images_base64: Optional list of base64-encoded images
+            
+        Returns:
+            Message content (string or list depending on provider)
+        """
+        # Handle backward compatibility: if single string is passed, convert to list
+        if images_base64 is not None and isinstance(images_base64, str):
+            images_base64 = [images_base64]
+        
+        # Build message content based on whether we have images
+        if images_base64 and len(images_base64) > 0:
+            # Build content list with text and all images
+            message_content = []
+            
+            # Default: text first, then images (OpenAI format)
+            # Subclasses can override this method to change the order
+            message_content.append({
+                "type": "text",
+                "text": prompt
+            })
+            for img_base64 in images_base64:
+                media_type = self._detect_image_media_type(img_base64)
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{img_base64}"
+                    }
+                })
+            logger.debug(f"Adding {len(images_base64)} image(s) to message")
+            return message_content
+        else:
+            # Regular text message
+            return prompt
+
+    def _detect_image_media_type(self, img_base64: str) -> str:
+        if not isinstance(img_base64, str) or not img_base64:
+            return "image/png"
+        if img_base64.startswith("data:"):
+            try:
+                header = img_base64.split(",", 1)[0]
+                if ";" in header:
+                    return header.split(";", 1)[0].replace("data:", "") or "image/png"
+            except Exception:
+                return "image/png"
+        import base64
+        prefix = img_base64[:128]
+        if len(prefix) % 4 != 0:
+            prefix += "=" * (4 - (len(prefix) % 4))
+        try:
+            data = base64.b64decode(prefix, validate=False)
+        except Exception:
+            return "image/png"
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+            return "image/gif"
+        if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
+    
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Handle API response and parse into action format.
+        
+        This method should be implemented by subclasses to handle provider-specific responses.
+        
+        Args:
+            response: API response object
+            attempt: Current attempt number
+            max_attempts: Maximum number of attempts
+            
+        Returns:
+            Parsed response dictionary
+        """
+        raise NotImplementedError("Subclasses must implement _handle_api_response")
+    
+    def call(self, prompt: str, images_base64: list = None) -> Dict[str, Any]:
+        """Send prompt to LLM API and return parsed response.
+        
+        Args:
+            prompt: The prompt string to send to the LLM
+            images_base64: Optional list of base64-encoded image strings
+            
+        Returns:
+            Parsed response dictionary with action information
+        """
+        # Prepare message content
+        message_content = self._prepare_message_content(prompt, images_base64)
+        self.messages.append({"role": "user", "content": message_content})
+
+        # Compact history + prune images BEFORE the API call so the request
+        # body reflects exactly what the model will see (and what counts
+        # against token budgets / prompt cache).
+        self._compact_history()
+
+        max_attempts = self.max_parse_retries
+
+        # API errors get exponential backoff via _call_with_retry (recoverable
+        # vs unrecoverable taxonomy from best-practices). Parse errors are
+        # already handled inside _handle_api_response with correction-prompt
+        # retries; they don't reach here unless every attempt failed.
+        response = _call_with_retry(
+            self._make_api_call,
+            max_attempts=self.api_retry_max_attempts,
+            base_delay=self.api_retry_base_delay,
+        )
+        return self._handle_api_response(response, 1, max_attempts)
+    
+    def _make_api_call(self) -> Any:
+        """Make the actual API call. Must be implemented by subclasses.
+        
+        Returns:
+            API response object
+        """
+        raise NotImplementedError("Subclasses must implement _make_api_call")
+    
+    def build_prompt(self, task_description: str = None, feedback: str = None, conversation_history: list = None) -> str:
+        """Build the initial prompt for the LLM.
+        
+        Args:
+            task_description: Initial task description (only used for first iteration)
+            feedback: Feedback from previous actions
+            conversation_history: List of previous conversation turns (not used, using self.messages for context instead)
+        """
+        # For Qwen3-VL models, include tool descriptions in prompt
+        tools_description = ""
+        if hasattr(self, 'is_qwen_vl_model') and self.is_qwen_vl_model and self.use_tools and self.tools:
+            tools_description = format_tools_as_text(self.tools)
+        
+        if task_description is not None:
+            # Initial prompt - only used for first iteration
+            if hasattr(self, 'is_qwen_vl_model') and self.is_qwen_vl_model:
+                if self.client_type in ["unified", "shell"]:
+                    return UNIFIED_INITIAL_PROMPT_TEMPLATE_QWEN3VL.format(instruction=task_description, tools_description=tools_description)
+            else:
+                if self.client_type in ["unified", "shell"]:
+                    return UNIFIED_INITIAL_PROMPT_TEMPLATE.format(instruction=task_description)
+        if feedback is not None:
+            # Feedback prompt - only contains feedback, context is maintained in self.messages
+            if hasattr(self, 'is_qwen_vl_model') and self.is_qwen_vl_model:
+                if self.client_type in ["unified", "shell"]:
+                    return UNIFIED_FEEDBACK_PROMPT_TEMPLATE_QWEN3VL.format(feedback=feedback)
+            else:
+                if self.client_type in ["unified", "shell"]:
+                    return UNIFIED_FEEDBACK_PROMPT_TEMPLATE.format(feedback=feedback)
+        raise ValueError("No task description or feedback provided")
+    
+    def parse_tool_calls_list(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Parse a list of tool calls into action format.
+        
+        Args:
+            tool_calls: List of tool call dictionaries
+            
+        Returns:
+            Dictionary with actions list or single action
+        """
+        actions = []
+        
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_call_id = tool_call.get("id")
+            tool_name = function.get("name")
+            try:
+                arguments_str = function.get("arguments", "{}")
+                if isinstance(arguments_str, str):
+                    arguments = json.loads(arguments_str)
+                else:
+                    arguments = arguments_str
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse tool arguments: {function.get('arguments')}")
+                arguments = {}
+            
+            # Map tool call to action
+            from nanorollout.envs.uda_env.tools import map_tool_call_to_action
+            action = map_tool_call_to_action(tool_name, arguments)
+            if tool_call_id:
+                action["tool_call_id"] = tool_call_id
+            actions.append(action)
+            logger.debug(f"Tool call: {tool_name} -> Action: {action}")
+        
+        # If only one action, return it directly; otherwise return list
+        if len(actions) == 1:
+            return actions[0]
+        else:
+            return {"actions": actions}
+    
+    def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse JSON from the LLM response."""
+        # Check if response contains tool_call tags (Qwen format) - if so, try to parse as tool call first
+        if self.use_tools and ("<tool_call>" in response or "</tool_call>" in response):
+            if hasattr(self, 'parse_text_tool_calls'):
+                tool_calls = self.parse_text_tool_calls(response)
+                if tool_calls:
+                    logger.debug(f"Found tool_call tags in response, parsed {len(tool_calls)} tool calls")
+                    parsed_response = self.parse_tool_calls_list(tool_calls)
+                    if parsed_response:
+                        return parsed_response[0] if isinstance(parsed_response, list) else parsed_response
+        
+        # Qwen models often prepend a `<think>...</think>` block; only parse content after it
+        try:
+            model_name = getattr(self, "model", "")
+            if isinstance(model_name, str) and "qwen" in model_name.lower():
+                lower = response.lower()
+                if "<think>" in lower:
+                    end_tag = "</think>"
+                    if end_tag in lower:
+                        idx = lower.rfind(end_tag)
+                        response = response[idx + len(end_tag):]
+                    else:
+                        open_idx = lower.find("<think>")
+                        response = response[open_idx + len("<think>"):]
+        except Exception:
+            pass
+        
+        # Remove tool_call tags if present (in case they weren't parsed above)
+        if "<tool_call>" in response or "</tool_call>" in response:
+            # Try to extract JSON from tool_call tags
+            pattern = r'<tool_call>\s*({.*?})\s*</tool_call>'
+            match = re.search(pattern, response, re.DOTALL)
+            if match:
+                response = match.group(1)
+                logger.debug(f"Extracted JSON from tool_call tags: {response[:200]}...")
+        
+        # Try to find JSON in markdown code block
+        json_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1).strip()
+        else:
+            # Try to parse the entire response as JSON
+            json_str = response.strip()
+            logger.debug(f"No markdown code block found, attempting to parse raw response: {json_str}")
+        
+        try:
+            parsed = json.loads(json_str)
+            logger.debug(f"Successfully parsed JSON response with keys: {list(parsed.keys())}")
+            return parsed
+        except json.JSONDecodeError as e:
+            # Attempt to auto-fix invalid backslash escapes common in shell commands
+            try:
+                fixed_json_str = re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", json_str)
+                parsed = json.loads(fixed_json_str)
+                logger.debug("Successfully parsed JSON after fixing invalid escapes")
+                return parsed
+            except json.JSONDecodeError as e2:
+                logger.error(f"Failed to parse JSON response: {e2}")
+                logger.error(f"Response content: {response[:200]}...")
+                raise ValueError(f"Invalid JSON in LLM response: {e2}")
+    
+    def get_history(self) -> List[Dict[str, str]]:
+        """Get the message history."""
+        return self.messages
+    
+    def clear_history(self) -> None:
+        """Clear the message history."""
+        logger.debug(f"Clearing message history ({len(self.messages)} messages removed)")
+        self.messages = []
+    
+    def get_cost_stats(self) -> Dict[str, Any]:
+        """Get API cost and usage statistics.
+        
+        Returns:
+            Dictionary with cost and token usage information
+        """
+        return {
+            "total_cost_usd": round(self.total_cost, 6),
+            "total_cost_input_uncached_usd": round(self.total_cost_input_uncached_usd, 6),
+            "total_cost_input_cached_usd": round(self.total_cost_input_cached_usd, 6),
+            "total_cost_output_usd": round(self.total_cost_output_usd, 6),
+            "total_cost_cache_write_usd": round(self.total_cost_cache_write_usd, 6),
+            "total_cost_cache_read_usd": round(self.total_cost_cache_read_usd, 6),
+            "total_input_tokens": self.total_input_tokens,
+            "total_uncached_input_tokens": self.total_uncached_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_cached_tokens": self.total_cached_tokens,
+            "total_reasoning_tokens": self.total_reasoning_tokens,
+            "total_cache_write_input_tokens": self.total_cache_write_input_tokens,
+            "total_cache_read_input_tokens": self.total_cache_read_input_tokens,
+            "total_tokens": self.total_input_tokens + self.total_output_tokens,
+            "api_calls": self.api_calls,
+            "model": self.model,
+            "per_call_costs": self.per_call_costs,
+        }
+    
+    def reset_cost_tracking(self) -> None:
+        """Reset cost tracking statistics."""
+        logger.debug("Resetting cost tracking")
+        self.total_cost = 0.0
+        self.total_input_tokens = 0
+        self.total_uncached_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cached_tokens = 0
+        self.total_reasoning_tokens = 0
+        self.total_cache_write_input_tokens = 0
+        self.total_cache_read_input_tokens = 0
+
+        self.total_cost_input_uncached_usd = 0.0
+        self.total_cost_input_cached_usd = 0.0
+        self.total_cost_output_usd = 0.0
+        self.total_cost_cache_write_usd = 0.0
+        self.total_cost_cache_read_usd = 0.0
+
+        self.api_calls = 0
+        self.per_call_costs = []
+        self.last_think = None
+    
+    def get_last_think(self) -> str | None:
+        """Get the last think/reasoning content for visualization.
+        
+        Returns:
+            The last think content string, or None if not available
+        """
+        return self.last_think
+    
+    def add_tool_message(self, tool_call_id: str, content: str) -> None:
+        """Append tool call results to the conversation history.
+        
+        Args:
+            tool_call_id: ID of the tool call
+            content: Result content from tool execution
+        """
+        if not tool_call_id:
+            return
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            content = str(content)
+        tool_message = {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content
+        }
+        self.messages.append(tool_message)
+        logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
+    
+
+    def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove images from a message, keeping only text content.
+        
+        Args:
+            message: Message dictionary with 'role' and 'content' keys
+            
+        Returns:
+            Modified message dictionary with images removed
+        """
+        content = message.get("content", "")
+        if isinstance(content, list):
+            # Filter out image items, keep only text
+            text_items = [
+                item for item in content
+                if not (isinstance(item, dict) and item.get("type") == "image_url")
+            ]
+            # If only one text item remains, extract just the text string
+            if len(text_items) == 1 and isinstance(text_items[0], dict) and text_items[0].get("type") == "text":
+                message["content"] = text_items[0].get("text", "")
+            else:
+                message["content"] = text_items
+        return message
+    
+    def _cleanup_old_user_message_images(self) -> None:
+        """Legacy: prune images from non-trailing user messages.
+
+        Replaced by :meth:`_compact_history`, which uses cache-friendly
+        ``StripImagesAtIntervals`` instead of "keep only the last image".
+        Kept as a no-op shim so subclass overrides that still call
+        ``self._cleanup_old_user_message_images()`` don't break.
+        """
+        return
+
+    # ------------------------------------------------------------------ #
+    # High-level task lifecycle (preferred entry points for TaskExecutor)
+    # ------------------------------------------------------------------ #
+
+    def start_task(self, task_description: str) -> None:
+        """Initialise conversation state for a new task.
+
+        Sets the (stable, cacheable) system prompt and seeds ``self.messages``
+        with the first user message — just ``Task: <instruction>`` — so the
+        system prefix is shared across tasks and providers can prompt-cache it.
+
+        Qwen3-VL keeps the legacy single-user-message layout because it parses
+        tool calls out of the user-visible prompt rather than from API-level
+        tool-calling; only the non-Qwen3-VL path migrates to the system/user
+        split.
+        """
+        self.clear_history()
+        is_qwen_vl = bool(getattr(self, "is_qwen_vl_model", False))
+        if is_qwen_vl:
+            self.system_prompt = ""
+            from nanorollout.envs.uda_env.tools import format_tools_as_text  # local import to avoid cycles
+            tools_description = (
+                format_tools_as_text(self.tools) if (self.use_tools and self.tools) else ""
+            )
+            initial = UNIFIED_INITIAL_PROMPT_TEMPLATE_QWEN3VL.format(
+                instruction=task_description,
+                tools_description=tools_description,
+            )
+            self.messages.append({"role": "user", "content": initial})
+        else:
+            from .prompts import build_system_prompt
+            self.system_prompt = build_system_prompt(
+                self.client_type, model_name=self.model
+            )
+            self.messages.append(
+                {"role": "user", "content": f"Task: {task_description}"}
+            )
+
+    def step(self, feedback: str, images_base64: list | None = None) -> Dict[str, Any]:
+        """Append a feedback turn and request the next action from the LLM.
+
+        Feedback text is intentionally minimal — once ``system_prompt`` carries
+        the guidance, every iteration's user message can be just the raw tool
+        feedback (no template wrapping, no progress notes). For Qwen3-VL the
+        feedback template still wraps the text since that model relies on
+        prompt-embedded reminders.
+        """
+        is_qwen_vl = bool(getattr(self, "is_qwen_vl_model", False))
+        if is_qwen_vl:
+            user_text = UNIFIED_FEEDBACK_PROMPT_TEMPLATE_QWEN3VL.format(feedback=feedback)
+        else:
+            user_text = feedback
+        return self.call(user_text, images_base64=images_base64)
+
+    # ------------------------------------------------------------------ #
+    # History compaction — applied before each API call.
+    # ------------------------------------------------------------------ #
+
+    def _compact_history(self) -> None:
+        """Apply sliding-window + cache-friendly image pruning in place.
+
+        Replaces ``self.messages`` with a trimmed list (keeping system-prompt
+        prefix, the original task message, and the last ``history_window``
+        iteration blocks) and replaces all-but-the-most-recent-N screenshots
+        with the ``[Image Omitted]`` placeholder. The image pruner
+        (:class:`StripImagesAtIntervals`) is structured so that the kept-image
+        set only changes once every ``image_prune_interval`` turns, which
+        keeps the request prefix stable for Anthropic prompt caching.
+
+        Safe to call before every ``_make_api_call``: short conversations
+        short-circuit out of both transforms.
+        """
+        if self.history_window <= 0 and self.image_prune_min < 0:
+            return
+        from .history import SlidingWindowCompactor, StripImagesAtIntervals
+
+        if self.history_window > 0:
+            self.messages = SlidingWindowCompactor(window=self.history_window)(
+                self.messages
+            )
+        StripImagesAtIntervals(
+            min_images=self.image_prune_min,
+            interval=self.image_prune_interval,
+        )(self.messages)
+
+
+class OpenAILLM(BaseLLM):
+    """Language model client using OpenAI API."""
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        # Initialize base class first
+        super().__init__(llm_config, client_type, **kwargs)
+        
+        if llm_config is None:
+            llm_config = {}
+
+        # Extract model and api_key from llm_config, with fallback to kwargs and env variables
+        self.model = llm_config.get("model", kwargs.get("model", "gpt-4.1"))
+        api_key = (
+            llm_config.get("api_key") or
+            kwargs.get("api_key") or
+            os.getenv("OPENAI_API_KEY")
+        )
+        # Supports reading base_url from environment variables and falling back to local vLLM if no OpenAI key is provided
+        base_url = (
+            llm_config.get("base_url") or
+            kwargs.get("base_url") or
+            os.getenv("OPENAI_BASE_URL") or
+            os.getenv("VLLM_BASE_URL")
+        )
+
+        # If no OpenAI key is found, but a base_url is configured/detected, set a placeholder key for vLLM compatibility
+        if not api_key:
+            if base_url:
+                api_key = "EMPTY"  # vLLM does not validate the key, but OpenAI SDK requires a string
+                logger.info("No OPENAI_API_KEY found. Using placeholder key for vLLM.")
+            else:
+                # If no key and no base_url, attempt to fall back to a local port-forwarded vLLM
+                base_url = "http://localhost:8000/v1"
+                api_key = "EMPTY"
+                logger.info("No OPENAI_API_KEY or base_url provided. Falling back to local vLLM at http://localhost:8001/v1")
+
+        # Initialize OpenAI client
+        client_kwargs = {}
+        if api_key:
+            client_kwargs["api_key"] = api_key
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        self.client = OpenAI(**client_kwargs)
+        self.cleanup_old_user_images: bool = bool(
+            llm_config.get("cleanup_old_user_images", kwargs.get("cleanup_old_user_images", False))
+        )
+        self.temperature = llm_config.get("temperature", kwargs.get("temperature"))
+
+        self._use_responses_api = isinstance(self.model, str) and self.model.lower() in ["gpt-5.4-pro", "gpt-5.4"]
+
+        logger.info(f"OpenAILLM initialized with model: {self.model} (responses_api={self._use_responses_api})")
+        logger.info(
+            "OpenAILLM cleanup_old_user_images=%s (false keeps historical images)",
+            self.cleanup_old_user_images,
+        )
+        if base_url:
+            logger.info(f"Using custom base_url: {base_url}")
+        logger.debug(f"API key configured: {bool(api_key)}")
+        logger.debug(f"Client type: {self.client_type}")
+        logger.debug(f"Tool calling mode: {self.use_tools}")
+    
+    def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
+        """Prepare message content for OpenAI API."""
+        # Handle backward compatibility: if single string is passed, convert to list
+        if images_base64 is not None and isinstance(images_base64, str):
+            images_base64 = [images_base64]
+        
+        # Build message content based on whether we have images
+        if images_base64 and len(images_base64) > 0:
+            # Build content list with text and all images
+            message_content = []
+            
+            # OpenAI multimodal format: text first, then images
+            message_content.append({
+                "type": "text",
+                "text": prompt
+            })
+            for img_base64 in images_base64:
+                media_type = self._detect_image_media_type(img_base64)
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{img_base64}"
+                    }
+                })
+            logger.debug(f"Adding {len(images_base64)} image(s) to message (total size: {sum(len(img) for img in images_base64)} chars)")
+            return message_content
+        else:
+            # Regular text message
+            return prompt
+
+    def _normalize_tool_calls_for_history(self, tool_calls) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+        """Validate tool calls before storing them in API history.
+
+        Returns a tuple of:
+        - normalized valid tool calls with canonical JSON arguments
+        - invalid tool call metadata for correction prompts
+        """
+        normalized_tool_calls: list[Dict[str, Any]] = []
+        invalid_tool_calls: list[Dict[str, Any]] = []
+
+        for tc in tool_calls:
+            tool_call_id = getattr(tc, "id", None)
+            tool_call_type = getattr(tc, "type", "function")
+            function = getattr(tc, "function", None)
+            tool_name = getattr(function, "name", "") if function else ""
+            raw_arguments = getattr(function, "arguments", "{}") if function else "{}"
+
+            if isinstance(raw_arguments, dict):
+                parsed_arguments = raw_arguments
+            elif isinstance(raw_arguments, str):
+                try:
+                    parsed_arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError as exc:
+                    invalid_tool_calls.append({
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "arguments": raw_arguments,
+                        "error": str(exc),
+                    })
+                    continue
+            else:
+                invalid_tool_calls.append({
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "arguments": raw_arguments,
+                    "error": f"Arguments must be a JSON string or object, got {type(raw_arguments).__name__}",
+                })
+                continue
+
+            if not isinstance(parsed_arguments, dict):
+                invalid_tool_calls.append({
+                    "id": tool_call_id,
+                    "name": tool_name,
+                    "arguments": raw_arguments,
+                    "error": f"Arguments must decode to a JSON object, got {type(parsed_arguments).__name__}",
+                })
+                continue
+
+            normalized_tool_calls.append({
+                "id": tool_call_id,
+                "type": tool_call_type,
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(parsed_arguments, ensure_ascii=False),
+                }
+            })
+
+        return normalized_tool_calls, invalid_tool_calls
+
+    def _build_invalid_tool_call_correction(self, invalid_tool_calls: list[Dict[str, Any]]) -> str:
+        """Create a correction prompt for malformed tool calls."""
+        lines = [
+            "Your previous tool call could not be parsed, so it was not executed.",
+            "Please try again and re-emit the intended tool call using the documented tool-call format only.",
+            "",
+            "Invalid tool calls:",
+        ]
+        for item in invalid_tool_calls:
+            lines.append(
+                f"- {item.get('name') or '<unknown>'}: arguments={item.get('arguments')!r}; error={item.get('error')}"
+            )
+        return "\n".join(lines)
+    
+    def _convert_tools_to_responses_api(self, openai_tools: list) -> list:
+        """Convert Chat Completions tool definitions to Responses API format (flat, no 'function' wrapper)."""
+        responses_tools = []
+        for tool in openai_tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                responses_tools.append({
+                    "type": "function",
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {}),
+                })
+        return responses_tools
+
+    def _convert_messages_to_responses_input(self) -> list:
+        """Convert Chat-Completions-style self.messages to Responses API input items.
+
+        Mapping:
+          system   -> {"role": "developer", ...}
+          user     -> {"role": "user", ...}  (images: image_url -> input_image)
+          assistant (with tool_calls) -> function_call items
+          assistant (text only) -> {"role": "assistant", ...}
+          tool     -> function_call_output
+        """
+        items: list = []
+        for msg in self.messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            tool_calls = msg.get("tool_calls")
+
+            if role == "system":
+                items.append({
+                    "role": "developer",
+                    "content": content if isinstance(content, str) else str(content or ""),
+                })
+
+            elif role == "user":
+                if isinstance(content, list):
+                    new_parts = []
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get("type") == "text":
+                            new_parts.append({"type": "input_text", "text": part.get("text", "")})
+                        elif part.get("type") == "image_url":
+                            url = part.get("image_url", {}).get("url", "")
+                            new_parts.append({"type": "input_image", "image_url": url})
+                    items.append({"role": "user", "content": new_parts})
+                else:
+                    items.append({"role": "user", "content": str(content or "")})
+
+            elif role == "assistant":
+                if tool_calls:
+                    for tc in tool_calls:
+                        func = tc.get("function", {})
+                        items.append({
+                            "type": "function_call",
+                            "call_id": tc.get("id", ""),
+                            "name": func.get("name", ""),
+                            "arguments": func.get("arguments", "{}"),
+                        })
+                if content:
+                    items.append({
+                        "role": "assistant",
+                        "content": content if isinstance(content, str) else str(content),
+                    })
+
+            elif role == "tool":
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": content if isinstance(content, str) else str(content or ""),
+                })
+        return items
+
+    def _make_api_call(self) -> Any:
+        if self._use_responses_api:
+            input_items = self._convert_messages_to_responses_input()
+            api_params = {
+                "model": self.model,
+                "input": input_items,
+                "reasoning": {"effort": "high"},
+            }
+            if self.system_prompt:
+                api_params["instructions"] = self.system_prompt
+            if self.use_tools and self.tools:
+                api_params["tools"] = self._convert_tools_to_responses_api(self.tools)
+            return self.client.responses.create(**api_params)
+        else:
+            # Prepend a system message if one is set; never mutate self.messages
+            # (compaction already owns that, and the system block isn't part of
+            # the iteration window — it lives entirely in the API request).
+            outgoing = self.messages
+            if self.system_prompt:
+                outgoing = [{"role": "system", "content": self.system_prompt}, *self.messages]
+            api_params = {
+                "model": self.model,
+                "messages": outgoing,
+            }
+            if self.use_tools and self.tools:
+                api_params["tools"] = self.tools
+            return self.client.chat.completions.create(**api_params)
+    
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Handle OpenAI API response."""
+        if hasattr(response, "usage") and response.usage:
+            cost_info = CostTracker.track_openai(response.usage, self.model)
+            if cost_info:
+                cost = float(cost_info["total_cost_usd"])
+                tokens = cost_info["tokens"]
+                breakdown = cost_info["cost_breakdown_usd"]
+
+                self.total_cost += cost
+                self.total_input_tokens += tokens["prompt_tokens"]
+                self.total_uncached_input_tokens += tokens["uncached_input_tokens"]
+                self.total_output_tokens += tokens["completion_tokens"]
+                self.total_cached_tokens += tokens["cached_input_tokens"]
+                self.total_reasoning_tokens += tokens["reasoning_tokens"]
+
+                self.total_cost_input_uncached_usd += float(breakdown["input_uncached_usd"])
+                self.total_cost_input_cached_usd += float(breakdown["input_cached_usd"])
+                self.total_cost_output_usd += float(breakdown["output_usd"])
+
+                self.api_calls += 1
+                self.per_call_costs.append(cost_info)
+
+                logger.info(
+                    f"API call #{self.api_calls} cost: ${cost:.6f} | "
+                    f"Tokens: {tokens['prompt_tokens']} in, {tokens['completion_tokens']} out, "
+                    f"{tokens['cached_input_tokens']} cached, {tokens['reasoning_tokens']} reasoning | "
+                    f"Running total: ${self.total_cost:.6f}"
+                )
+
+        class MockFunction:
+            def __init__(self, name, arguments):
+                self.name = name
+                self.arguments = arguments
+
+        class MockToolCall:
+            def __init__(self, id, type, function):
+                self.id = id
+                self.type = type
+                self.function = function
+
+        class MockMessage:
+            def __init__(self):
+                self.content = None
+                self.tool_calls = None
+
+        # Detect legacy Chat Completions response format
+        if hasattr(response, 'choices') and response.choices:
+            message = response.choices[0].message
+        else:
+            # Compatibility path for newer Responses API
+            message = MockMessage()
+            
+            # 1. Extract text content (support multiple possible field names)
+            if hasattr(response, 'output_text'):
+                message.content = response.output_text
+            elif hasattr(response, 'content'):
+                message.content = response.content
+            elif hasattr(response, 'text'):
+                message.content = response.text
+            else:
+                # If none exist, try treating `output` as a plain string
+                message.content = getattr(response, 'output', "") if isinstance(getattr(response, 'output', None), str) else None
+
+            # 2. Extract tool calls (support both object and dict variants)
+            raw_output = getattr(response, 'output', [])
+            raw_tool_calls = getattr(response, 'tool_calls', [])
+            
+            # Determine which field contains tool call entries
+            items_to_check = raw_tool_calls if raw_tool_calls else (raw_output if isinstance(raw_output, list) else [])
+            
+            extracted_tools = []
+            for item in items_to_check:
+                # Support SDK returns as either dict or Pydantic-like object
+                is_dict = isinstance(item, dict)
+                item_type = item.get('type', '') if is_dict else getattr(item, 'type', '')
+                
+                # Check whether this item represents a tool/function call
+                if item_type in ['function', 'function_call'] or (is_dict and 'name' in item) or hasattr(item, 'name'):
+                    f_name = item.get('name', '') if is_dict else getattr(item, 'name', '')
+                    f_args = item.get('arguments', '{}') if is_dict else getattr(item, 'arguments', '{}')
+                    
+                    # Use provided call ID, otherwise generate a unique mock ID
+                    tc_id = item.get('call_id', item.get('id', f"call_{id(item)}")) if is_dict else getattr(item, 'call_id', getattr(item, 'id', f"call_{id(item)}"))
+                    
+                    extracted_tools.append(MockToolCall(
+                        id=tc_id, 
+                        type="function", 
+                        function=MockFunction(name=f_name, arguments=f_args)
+                    ))
+            
+            if extracted_tools:
+                message.tool_calls = extracted_tools
+
+        # Handle tool calling response (OpenAI format)
+        if self.use_tools and hasattr(message, 'tool_calls') and message.tool_calls:
+            # Save think content (reasoning before action) for visualization
+            self.last_think = message.content if message.content else None
+
+            normalized_tool_calls, invalid_tool_calls = self._normalize_tool_calls_for_history(message.tool_calls)
+
+            if invalid_tool_calls:
+                logger.warning(
+                    f"Rejected {len(invalid_tool_calls)} malformed tool call(s) from {self.model}; "
+                    "they will not be written back to API history."
+                )
+                for invalid_tool_call in invalid_tool_calls:
+                    logger.error(
+                        "Invalid tool call arguments for %s: %r (%s)",
+                        invalid_tool_call.get("name"),
+                        invalid_tool_call.get("arguments"),
+                        invalid_tool_call.get("error"),
+                    )
+
+                if message.content:
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                    })
+
+                if attempt >= max_attempts:
+                    return {
+                        "action_type": "error",
+                        "error_message": self._build_invalid_tool_call_correction(invalid_tool_calls),
+                    }
+
+                self.messages.append({
+                    "role": "user",
+                    "content": self._build_invalid_tool_call_correction(invalid_tool_calls),
+                })
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+
+            self.messages.append({
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": normalized_tool_calls,
+            })
+
+            logger.debug(f"Received {len(normalized_tool_calls)} tool calls from {self.model}")
+
+            try:
+                parsed_response = self.parse_tool_calls_list(normalized_tool_calls)
+                logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse tool calls (attempt {attempt}/{max_attempts}): {parse_error}")
+                # Add tool messages for each tool_call_id to satisfy OpenAI API requirements
+                for tc in normalized_tool_calls:
+                    tool_call_id = tc.get("id")
+                    if tool_call_id:
+                        error_content = f"Error parsing tool call: {str(parse_error)}"
+                        self.add_tool_message(tool_call_id, error_content)
+
+                if attempt >= max_attempts:
+                    return {
+                        "action_type": "error",
+                        "error_message": str(parse_error),
+                        "tool_calls": normalized_tool_calls
+                    }
+                # Add error message to conversation and retry
+                error_message = (
+                    f"Error parsing tool calls: {str(parse_error)}\n"
+                    f"Please check the tool parameters and try again. "
+                    f"Make sure you only use the parameters documented for each tool."
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": error_message
+                })
+                # Retry by making another API call
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+        else:
+            # Regular text response (non-tool calling mode or no tools called)
+            assistant_message = message.content if message.content else ""
+            # Save think content for visualization
+            self.last_think = assistant_message
+            self.messages.append({"role": "assistant", "content": assistant_message})
+
+            logger.debug(f"Received response from {self.model} (length: {len(assistant_message)} chars)")
+
+            try:
+                parsed_response = self.parse_response(assistant_message)
+                logger.debug(f"Parsed response (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse assistant response (attempt {attempt}/{max_attempts}): {parse_error}")
+                if attempt >= max_attempts:
+                    raise
+                correction_prompt = (
+                    "Your previous response did not follow the required format. "
+                    "Always respond with either (a) a tool call, or (b) a JSON object describing the next action "
+                    "following this schema:\n"
+                    "{\n"
+                    '  "action_type": "<one of: computer_use_*, file_*, code_execute, shell_execute, task_complete>",\n'
+                    '  "param_name": "param_value", ...\n'
+                    "}\n"
+                    "Do not nest parameters in a 'parameters' field. Put all parameters at the top level.\n"
+                    "Do not include natural language outside the JSON object."
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": correction_prompt
+                })
+                # Retry by making another API call
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+
+    def parse_tool_calls_list(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Parse a list of tool calls into action format."""
+        actions = []
+        
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_call_id = tool_call.get("id")
+            tool_name = function.get("name")
+            try:
+                arguments_str = function.get("arguments", "{}")
+                if isinstance(arguments_str, str):
+                    arguments = json.loads(arguments_str)
+                else:
+                    arguments = arguments_str
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse tool arguments: {function.get('arguments')}")
+                arguments = {}
+            
+            # Map tool call to action
+            from nanorollout.envs.uda_env.tools import map_tool_call_to_action
+            action = map_tool_call_to_action(tool_name, arguments)
+            if tool_call_id:
+                action["tool_call_id"] = tool_call_id
+            actions.append(action)
+            logger.debug(f"Tool call: {tool_name} -> Action: {action}")
+        
+        # If only one action, return it directly; otherwise return list
+        if len(actions) == 1:
+            return actions[0]
+        else:
+            return {"actions": actions}
+    
+    def parse_tool_calls(self, tool_calls) -> Dict[str, Any]:
+        """Parse tool calls from OpenAI API response into action format."""
+        # Convert OpenAI tool_calls to our internal format
+        tool_calls_list = []
+        for tc in tool_calls:
+            tool_calls_list.append({
+                "id": getattr(tc, "id", None),
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments
+                }
+            })
+        
+        return self.parse_tool_calls_list(tool_calls_list)
+
+    def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse JSON from the LLM response."""
+        # Try to find JSON in markdown code block
+        json_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1).strip()
+        else:
+            # Try to parse the entire response as JSON
+            json_str = response.strip()
+            logger.debug(f"No markdown code block found, attempting to parse raw response: {json_str}")
+
+        try:
+            parsed = json.loads(json_str)
+            logger.debug(f"Successfully parsed JSON response with keys: {list(parsed.keys())}")
+            return parsed
+        except json.JSONDecodeError as e:
+            # Attempt to auto-fix invalid backslash escapes common in shell commands
+            try:
+                fixed_json_str = re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", json_str)
+                parsed = json.loads(fixed_json_str)
+                logger.debug("Successfully parsed JSON after fixing invalid escapes")
+                return parsed
+            except json.JSONDecodeError as e2:
+                logger.error(f"Failed to parse JSON response: {e2}")
+                logger.error(f"Response content: {response[:200]}...")
+                raise ValueError(f"Invalid JSON in LLM response: {e2}")
+
+    def get_history(self) -> List[Dict[str, str]]:
+        """Get the message history."""
+        return self.messages
+
+    def clear_history(self) -> None:
+        """Clear the message history."""
+        logger.debug(f"Clearing message history ({len(self.messages)} messages removed)")
+        self.messages = []
+
+    def add_tool_message(self, tool_call_id: str, content: str) -> None:
+        """Append tool call results to the conversation history for OpenAI tool-calling compliance."""
+        if not tool_call_id:
+            return
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            content = str(content)
+        tool_message = {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content
+        }
+        self.messages.append(tool_message)
+        logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
+    
+    def _cleanup_old_user_message_images(self) -> None:
+        """Remove images from old user messages, keeping only the most recent user image turn."""
+        if not getattr(self, "cleanup_old_user_images", True):
+            logger.debug("OpenAILLM: keeping images in all user messages (cleanup disabled)")
+            return
+
+        # Find the last user message (should be the one we just added)
+        last_user_msg_idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                last_user_msg_idx = i
+                break
+
+        # Remove images from all user messages except the last one
+        if last_user_msg_idx is not None:
+            for i in range(len(self.messages)):
+                if i != last_user_msg_idx and self.messages[i].get("role") == "user":
+                    old_content = self.messages[i].get("content", "")
+                    if isinstance(old_content, list):
+                        has_images = any(
+                            isinstance(item, dict) and item.get("type") == "image_url"
+                            for item in old_content
+                        )
+                        if has_images:
+                            self.messages[i] = self._remove_images_from_message(self.messages[i])
+                            logger.debug(f"Removed images from old user message at index {i}")
+
+
+class QwenLLM(OpenAILLM):
+    """Language model client for Qwen models (compatible with OpenAI API but with special handling).
+
+    Handles two distinct model families:
+    - Qwen3-VL: text-based tool calling via <tool_call> tags, special prompt templates
+    - Qwen3.5+: standard OpenAI tool calling (server-side --tool-call-parser), reasoning_content support
+    """
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        super().__init__(llm_config, client_type, **kwargs)
+        model_lower = self.model.lower()
+        self.is_qwen_vl_model = "qwen3-vl" in model_lower or "qwen3_vl" in model_lower
+        self.is_qwen35_model = "qwen3.5" in model_lower or "qwen3_5" in model_lower
+        logger.info(
+            f"QwenLLM initialized with model: {self.model} "
+            f"(is_vl: {self.is_qwen_vl_model}, is_3.5: {self.is_qwen35_model}, "
+            f"cleanup_old_user_images: {self.cleanup_old_user_images})"
+        )
+
+    def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
+        """Prepare message content for Qwen models."""
+        # Handle backward compatibility: if single string is passed, convert to list
+        if images_base64 is not None and isinstance(images_base64, str):
+            images_base64 = [images_base64]
+        
+        # Build message content based on whether we have images
+        if images_base64 and len(images_base64) > 0:
+            # Build content list with text and all images
+            message_content = []
+            
+            # Qwen3-VL format: images first, then text
+            if self.is_qwen_vl_model:
+                for img_base64 in images_base64:
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_base64}"
+                        }
+                    })
+                message_content.append({
+                    "type": "text",
+                    "text": prompt
+                })
+            else:
+                # Default/OpenAI format for non-VL Qwen (if they support images?)
+                # Assuming text first
+                message_content.append({
+                    "type": "text",
+                    "text": prompt
+                })
+                for img_base64 in images_base64:
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_base64}"
+                        }
+                    })
+            
+            logger.debug(f"Adding {len(images_base64)} image(s) to message")
+            return message_content
+        else:
+            # Regular text message
+            return prompt
+
+    def build_prompt(self, task_description: str = None, feedback: str = None, conversation_history: list = None) -> str:
+        """Build the initial prompt for the LLM (handling Qwen3-VL)."""
+        # For Qwen3-VL models, include tool descriptions in prompt
+        tools_description = ""
+        if self.is_qwen_vl_model and self.use_tools and self.tools:
+            tools_description = format_tools_as_text(self.tools)
+        
+        if task_description is not None:
+            # Initial prompt - only used for first iteration
+            if self.is_qwen_vl_model:
+                # Use Qwen3-VL specific templates with tool descriptions
+                if self.client_type == "unified":
+                    return UNIFIED_INITIAL_PROMPT_TEMPLATE_QWEN3VL.format(instruction=task_description, tools_description=tools_description)
+            else:
+                # Regular templates for non-VL Qwen models
+                if self.client_type == "unified":
+                    return UNIFIED_INITIAL_PROMPT_TEMPLATE.format(instruction=task_description)
+        if feedback is not None:
+            # Feedback prompt
+            if self.is_qwen_vl_model:
+                if self.client_type == "unified":
+                    return UNIFIED_FEEDBACK_PROMPT_TEMPLATE_QWEN3VL.format(feedback=feedback)
+            else:
+                if self.client_type == "unified":
+                    return UNIFIED_FEEDBACK_PROMPT_TEMPLATE.format(feedback=feedback)
+        
+        # Fallback to base implementation if no match
+        return super().build_prompt(task_description, feedback, conversation_history)
+
+    def _make_api_call(self) -> Any:
+        """Make OpenAI API call, but exclude tools for Qwen3-VL (text-based tool calling)."""
+        # Prepend the system prompt for non-VL Qwen flows; VL keeps the
+        # legacy single-user-message layout where start_task() leaves
+        # system_prompt empty by design.
+        outgoing = self.messages
+        if self.system_prompt and not self.is_qwen_vl_model:
+            outgoing = [{"role": "system", "content": self.system_prompt}, *self.messages]
+
+        api_params = {
+            "model": self.model,
+            "messages": outgoing,
+            "extra_body": {"reasoning": {"enabled": True}},
+        }
+
+        if self.temperature is not None:
+            api_params["temperature"] = self.temperature
+
+        # Add tools if in tool calling mode (except for Qwen3-VL text-based tool calls)
+        if self.use_tools and self.tools and not self.is_qwen_vl_model:
+            api_params["tools"] = self.tools
+
+        return self.client.chat.completions.create(**api_params)
+
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Handle API response with Qwen-specific parsing.
+
+        For Qwen3.5+: server-side --reasoning-parser and --tool-call-parser handle parsing,
+        so we use standard OpenAI handling and just capture reasoning_content for visualization.
+        For Qwen3-VL: text-based <tool_call> tag parsing (legacy path).
+        """
+        # Qwen3.5+: standard OpenAI tool_calls + reasoning_content (server-side parsed)
+        if self.is_qwen35_model:
+            message = response.choices[0].message
+            reasoning_content = getattr(message, "reasoning_content", None)
+            result = super()._handle_api_response(response, attempt, max_attempts)
+            if reasoning_content:
+                self.last_think = reasoning_content
+            return result
+
+        # Qwen3-VL / older Qwen: text-based tool call parsing.
+        # Per benchmark requirements, we do not track costs for Qwen/DeepSeek/other providers.
+
+        message = response.choices[0].message
+        assistant_message = message.content if message.content else ""
+        
+        has_tool_call_pattern = ("<tool_call>" in assistant_message or "</tool_call>" in assistant_message)
+        
+        if self.use_tools and assistant_message and has_tool_call_pattern:
+            tool_calls = self.parse_text_tool_calls(assistant_message)
+            if tool_calls:
+                if "<tool_call>" in assistant_message:
+                    think_part = assistant_message.split("<tool_call>")[0].strip()
+                    self.last_think = think_part if think_part else None
+                else:
+                    self.last_think = assistant_message
+                
+                self.messages.append({"role": "assistant", "content": assistant_message})
+                
+                logger.debug(f"Parsed {len(tool_calls)} tool calls from Qwen model")
+                
+                try:
+                    parsed_response = self.parse_tool_calls_list(tool_calls)
+                    logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                    return parsed_response
+                except ValueError as parse_error:
+                    logger.warning(f"Failed to parse Qwen tool calls (attempt {attempt}/{max_attempts}): {parse_error}")
+                    if attempt >= max_attempts:
+                        return {
+                            "action_type": "error",
+                            "error_message": str(parse_error),
+                            "tool_calls": tool_calls
+                        }
+                    error_message = f"Error parsing tool calls: {str(parse_error)}\nPlease check the tool parameters."
+                    self.messages.append({"role": "user", "content": error_message})
+                    return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+        
+        return super()._handle_api_response(response, attempt, max_attempts)
+
+    def parse_text_tool_calls(self, content: str) -> List[Dict[str, Any]]:
+        """Parse Qwen model text-based tool calls."""
+        tool_calls = []
+        
+        # First, try to find complete tool_call blocks
+        pattern = r'<tool_call>\s*({.*?})\s*</tool_call>'
+        matches = re.findall(pattern, content, re.DOTALL)
+        
+        # If no complete blocks found, try to find JSON before </tool_call> tag
+        if not matches:
+            pattern2 = r'({[^{}]*"name"[^{}]*})\s*</tool_call>'
+            matches = re.findall(pattern2, content, re.DOTALL)
+            if not matches:
+                pattern3 = r'({[^{}]*"name"[^{}]*"arguments"[^{}]*})'
+                potential_matches = re.findall(pattern3, content, re.DOTALL)
+                for potential in potential_matches:
+                    idx = content.find(potential)
+                    if idx != -1:
+                        remaining = content[idx + len(potential):idx + len(potential) + 50]
+                        if "</tool_call>" in remaining:
+                            matches.append(potential)
+                            break
+        
+        for match in matches:
+            try:
+                tool_call_data = json.loads(match)
+            except json.JSONDecodeError:
+                try:
+                    fixed_match = self._fix_json_control_chars(match)
+                    tool_call_data = json.loads(fixed_match)
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.error(f"Failed to parse Qwen tool call: {e}")
+                    continue
+            
+            tool_calls.append({
+                "function": {
+                    "name": tool_call_data.get("name"),
+                    "arguments": json.dumps(tool_call_data.get("arguments", {}))
+                }
+            })
+        
+        return tool_calls
+
+    def _fix_json_control_chars(self, json_str: str) -> str:
+        """Fix unescaped control characters in JSON string values."""
+        result = []
+        i = 0
+        in_string = False
+        escape_next = False
+        
+        while i < len(json_str):
+            char = json_str[i]
+            if escape_next:
+                result.append(char)
+                escape_next = False
+            elif char == '\\':
+                result.append(char)
+                escape_next = True
+            elif char == '"':
+                result.append(char)
+                in_string = not in_string
+            elif in_string:
+                if char == '\n': result.append('\\n')
+                elif char == '\r': result.append('\\r')
+                elif char == '\t': result.append('\\t')
+                elif char == '\b': result.append('\\b')
+                elif char == '\f': result.append('\\f')
+                elif ord(char) < 32: result.append(f'\\u{ord(char):04x}')
+                else: result.append(char)
+            else:
+                result.append(char)
+            i += 1
+        return ''.join(result)
+
+    def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse JSON from the LLM response (handling <think> tags)."""
+        # Qwen models often prepend a `<think>...</think>` block
+        try:
+            lower = response.lower()
+            if "<think>" in lower:
+                end_tag = "</think>"
+                if end_tag in lower:
+                    idx = lower.rfind(end_tag)
+                    response = response[idx + len(end_tag):]
+                else:
+                    open_idx = lower.find("<think>")
+                    response = response[open_idx + len("<think>"):]
+        except Exception:
+            pass
+        
+        # Remove tool_call tags if present (in case they weren't parsed above)
+        if "<tool_call>" in response or "</tool_call>" in response:
+            pattern = r'<tool_call>\s*({.*?})\s*</tool_call>'
+            match = re.search(pattern, response, re.DOTALL)
+            if match:
+                response = match.group(1)
+        
+        return super().parse_response(response)
+
+    def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove images from a message, keeping only text content."""
+        content = message.get("content", "")
+        if isinstance(content, list):
+            text_items = [
+                item for item in content
+                if not (isinstance(item, dict) and item.get("type") == "image_url")
+            ]
+            if len(text_items) == 1 and isinstance(text_items[0], dict) and text_items[0].get("type") == "text":
+                message["content"] = text_items[0].get("text", "")
+            else:
+                message["content"] = text_items
+        return message
+
+    def _cleanup_old_user_message_images(self) -> None:
+        """Remove images from old user messages."""
+        if not getattr(self, "cleanup_old_user_images", True):
+            logger.debug("QwenLLM: keeping images in all user messages (cleanup disabled)")
+            return
+
+        # Find the last user message
+        last_user_msg_idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                last_user_msg_idx = i
+                break
+        
+        if last_user_msg_idx is not None:
+            for i in range(len(self.messages)):
+                if i != last_user_msg_idx and self.messages[i].get("role") == "user":
+                    old_content = self.messages[i].get("content", "")
+                    if isinstance(old_content, list):
+                        has_images = any(isinstance(item, dict) and item.get("type") == "image_url"
+                                        for item in old_content)
+                        if has_images:
+                            self.messages[i] = self._remove_images_from_message(self.messages[i])
+                            logger.debug(f"Removed images from old user message at index {i}")
+
+
+class GLMLLM(OpenAILLM):
+    """Language model client for Zhipu AI GLM models (OpenAI-compatible)."""
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        if llm_config is None:
+            llm_config = {}
+
+        # Set GLM defaults before parent init
+        if not llm_config.get("base_url") and not kwargs.get("base_url") and not os.getenv("OPENAI_BASE_URL"):
+            llm_config["base_url"] = "https://open.bigmodel.cn/api/paas/v4/"
+
+        if not llm_config.get("model") and not kwargs.get("model"):
+            llm_config["model"] = "glm-4-plus"
+
+        # Resolve API key from GLM-specific env vars before falling back to OpenAI logic
+        if not llm_config.get("api_key") and not kwargs.get("api_key") and not os.getenv("OPENAI_API_KEY"):
+            glm_key = os.getenv("ZHIPUAI_API_KEY") or os.getenv("GLM_API_KEY")
+            if glm_key:
+                llm_config["api_key"] = glm_key
+
+        super().__init__(llm_config, client_type, **kwargs)
+
+        self.is_vl_model = any(tag in self.model.lower() for tag in ["4.6v", "4.5v", "4v-", "-vl"])
+        logger.info(
+            f"GLMLLM initialized with model: {self.model} "
+            f"(is_vl: {self.is_vl_model}, cleanup_old_user_images: {self.cleanup_old_user_images})"
+        )
+
+
+class KimiLLM(OpenAILLM):
+    """Language model client for Moonshot AI Kimi models (OpenAI-compatible).
+
+    Supports both official API (kimi-k2-turbo-preview, etc.) and self-hosted Kimi-K2.5
+    via SGLang/vLLM with --reasoning-parser kimi_k2 (reasoning_content captured for visualization).
+    """
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        if llm_config is None:
+            llm_config = {}
+
+        # Set Kimi defaults before parent init
+        if not llm_config.get("base_url") and not kwargs.get("base_url") and not os.getenv("OPENAI_BASE_URL"):
+            llm_config["base_url"] = "https://api.moonshot.ai/v1"
+
+        if not llm_config.get("model") and not kwargs.get("model"):
+            llm_config["model"] = "kimi-k2-turbo-preview"
+
+        # Resolve API key from Kimi-specific env vars
+        if not llm_config.get("api_key") and not kwargs.get("api_key") and not os.getenv("OPENAI_API_KEY"):
+            kimi_key = os.getenv("MOONSHOT_API_KEY") or os.getenv("KIMI_API_KEY")
+            if kimi_key:
+                llm_config["api_key"] = kimi_key
+
+        super().__init__(llm_config, client_type, **kwargs)
+
+        model_lower = self.model.lower()
+        self.is_multimodal = any(tag in model_lower for tag in ["k2.5", "k2-5"])
+        self.is_k2_5_model = "k2.5" in model_lower or "kimi-k2" in model_lower
+        logger.info(
+            f"KimiLLM initialized with model: {self.model} "
+            f"(is_multimodal: {self.is_multimodal}, is_k2.5: {self.is_k2_5_model}, "
+            f"cleanup_old_user_images: {self.cleanup_old_user_images})"
+        )
+
+    def build_prompt(self, task_description: str = None, feedback: str = None, conversation_history: list = None) -> str:
+        """Build Kimi prompt with explicit normalized coordinate instructions."""
+        prompt = super().build_prompt(
+            task_description=task_description,
+            feedback=feedback,
+            conversation_history=conversation_history,
+        )
+        return f"{prompt}\n\n{KIMI_RELATIVE_COORDINATE_INSTRUCTION}"
+
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Capture reasoning_content for Kimi-K2.5 (SGLang/vLLM with --reasoning-parser kimi_k2)."""
+        if self.is_k2_5_model:
+            message = response.choices[0].message
+            reasoning_content = getattr(message, "reasoning_content", None)
+            result = super()._handle_api_response(response, attempt, max_attempts)
+            if reasoning_content:
+                self.last_think = reasoning_content
+            return result
+        return super()._handle_api_response(response, attempt, max_attempts)
+
+
+class ClaudeLLM(BaseLLM):
+    """Language model client using Anthropic Claude API."""
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("Anthropic libraries not available. Install with: pip install anthropic")
+        
+        # Initialize base class first
+        super().__init__(llm_config, client_type, **kwargs)
+        
+        if llm_config is None:
+            llm_config = {}
+
+        # Extract model and api_key from llm_config, with fallback to kwargs and env variables
+        self.model = llm_config.get("model", kwargs.get("model", "claude-sonnet-4-6"))
+        api_key = (
+            llm_config.get("api_key") or
+            kwargs.get("api_key") or
+            os.getenv("ANTHROPIC_API_KEY")
+        )
+        
+        if not api_key:
+            raise ValueError("Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable, or provide in config.")
+
+        # Initialize Anthropic client
+        base_url = (
+            llm_config.get("base_url") or
+            kwargs.get("base_url") or
+            os.getenv("ANTHROPIC_BASE_URL")
+        )
+        
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            
+        self.client = anthropic.Anthropic(**client_kwargs)
+
+        # Set cleanup_old_user_images=false in controller.args to keep all past
+        # user-turn images in history (higher token/cost; default true matches prior behavior).
+        self.cleanup_old_user_images: bool = bool(
+            llm_config.get("cleanup_old_user_images", kwargs.get("cleanup_old_user_images", False))
+        )
+
+        logger.info(f"ClaudeLLM initialized with model: {self.model}")
+        logger.info(
+            "ClaudeLLM cleanup_old_user_images=%s (false keeps historical images)",
+            self.cleanup_old_user_images,
+        )
+        logger.debug(f"API key configured: {bool(api_key)}")
+        logger.debug(f"Client type: {self.client_type}")
+        logger.debug(f"Tool calling mode: {self.use_tools}")
+
+    def _convert_openai_tools_to_claude(self, openai_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert OpenAI tool format to Claude tool format."""
+        claude_tools = []
+        for tool in openai_tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                claude_tool = {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {})
+                }
+                claude_tools.append(claude_tool)
+        return claude_tools
+
+    def _prepare_message_content(self, prompt: str, images_base64: list = None) -> Any:
+        """Prepare message content for Claude API."""
+        # Handle backward compatibility
+        if images_base64 is not None and isinstance(images_base64, str):
+            images_base64 = [images_base64]
+        
+        if images_base64 and len(images_base64) > 0:
+            message_content = []
+            
+            # Add images first (or text first? Claude documentation says text/image order doesn't matter much but usually alternating)
+            # The user example has image first then text.
+            for img_base64 in images_base64:
+                media_type = self._detect_image_media_type(img_base64)
+                message_content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": img_base64,
+                    }
+                })
+            
+            # Add text
+            message_content.append({
+                "type": "text",
+                "text": prompt
+            })
+            
+            logger.debug(f"Adding {len(images_base64)} image(s) to message")
+            return message_content
+        else:
+            return prompt
+
+    def _compact_history(self) -> None:
+        """Claude extension to the base compaction pass.
+
+        Runs the universal sliding-window + image-pruning, then sets
+        trailing cache-control breakpoints. Co-locating this with the
+        rest of the message-rewriting transforms matches the ordering in
+        ``anthropic-quickstarts/computer-use-best-practices/loop.py``:
+
+            _truncate_to_last_compaction → prune → _set_trailing_cache_control
+        """
+        super()._compact_history()
+        _set_trailing_cache_control(self.messages, max_breakpoints=3)
+
+    def _make_api_call(self) -> Any:
+        """Make Claude API call.
+
+        Cache-control breakpoint strategy (ported from
+        ``anthropic-quickstarts/computer-use-best-practices/loop.py``):
+
+        * One breakpoint on the system block (set here, fresh each call).
+        * Up to three rolling breakpoints on trailing user-role content
+          blocks (tool_result / image / text). Anthropic caps us at four
+          total; spending the first on system and the rest near the tail
+          means new turns extend a cached prefix instead of invalidating
+          it. Those three are set inside :meth:`_compact_history`.
+        """
+        system: list[Dict[str, Any]] | None = None
+        if self.system_prompt:
+            system = [{
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }]
+
+        api_params: Dict[str, Any] = {
+            "model": self.model,
+            "messages": self.messages,
+            "max_tokens": 16000,
+        }
+        if system is not None:
+            api_params["system"] = system
+
+        if self.use_tools and self.tools:
+            api_params["tools"] = self._convert_openai_tools_to_claude(self.tools)
+
+        if isinstance(self.model, str) and self.model.lower() in ["claude-opus-4-6", "claude-sonnet-4-6"]:
+            api_params["thinking"] = {"type": "adaptive"}
+            api_params["output_config"] = {"effort": "high"}
+
+        return self.client.messages.create(**api_params)
+    
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Handle Claude API response."""
+        if hasattr(response, "usage") and response.usage:
+            cost_info = CostTracker.track_anthropic(response.usage, self.model)
+            if cost_info:
+                cost = float(cost_info["total_cost_usd"])
+                tokens = cost_info["tokens"]
+                breakdown = cost_info["cost_breakdown_usd"]
+
+                self.total_cost += cost
+                self.total_input_tokens += (
+                    tokens["input_tokens"]
+                    + tokens["cache_write_input_tokens"]
+                    + tokens["cache_read_input_tokens"]
+                )
+                self.total_uncached_input_tokens += tokens["input_tokens"]
+                self.total_output_tokens += tokens["output_tokens"]
+
+                self.total_cache_write_input_tokens += tokens["cache_write_input_tokens"]
+                self.total_cache_read_input_tokens += tokens["cache_read_input_tokens"]
+                self.total_cached_tokens += tokens["cache_write_input_tokens"] + tokens["cache_read_input_tokens"]
+
+                self.total_cost_input_uncached_usd += float(breakdown["input_usd"])
+                self.total_cost_output_usd += float(breakdown["output_usd"])
+                self.total_cost_cache_write_usd += float(breakdown["cache_write_usd"])
+                self.total_cost_cache_read_usd += float(breakdown["cache_read_usd"])
+
+                self.api_calls += 1
+                self.per_call_costs.append(cost_info)
+
+                logger.info(
+                    f"API call #{self.api_calls} cost: ${cost:.6f} | "
+                    f"in={tokens['input_tokens']} cache_w={tokens['cache_write_input_tokens']} "
+                    f"cache_r={tokens['cache_read_input_tokens']} out={tokens['output_tokens']} | "
+                    f"Running total: ${self.total_cost:.6f}"
+                )
+
+        # Extract content
+        content_blocks = response.content
+        text_content = ""
+        tool_use_blocks = []
+        
+        for block in content_blocks:
+            if block.type == "text":
+                text_content += block.text
+            elif block.type == "tool_use":
+                tool_use_blocks.append(block)
+        
+        # Save think content
+        self.last_think = text_content if text_content else None
+        
+        # Add assistant message to history
+        # Claude expects the exact content blocks in history for assistant
+        # We need to reconstruct the content list
+        assistant_content = []
+        for block in content_blocks:
+            if block.type == "text":
+                assistant_content.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input
+                })
+        
+        self.messages.append({
+            "role": "assistant",
+            "content": assistant_content
+        })
+
+        # Handle tool calls
+        if tool_use_blocks:
+            tool_calls_list = []
+            for tool_use in tool_use_blocks:
+                tool_calls_list.append({
+                    "id": tool_use.id,
+                    "function": {
+                        "name": tool_use.name,
+                        "arguments": tool_use.input # Already a dict
+                    }
+                })
+            
+            logger.debug(f"Received {len(tool_calls_list)} tool calls from {self.model}")
+            
+            try:
+                parsed_response = self.parse_tool_calls_list(tool_calls_list)
+                logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse tool calls: {parse_error}")
+                if attempt >= max_attempts:
+                     return {
+                        "action_type": "error",
+                        "error_message": str(parse_error),
+                        "tool_calls": tool_calls_list
+                    }
+                
+                # Add error message
+                self.messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text", 
+                            "text": f"Error parsing tool calls: {str(parse_error)}"
+                        }
+                    ]
+                })
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+        else:
+            # Regular text response
+            logger.debug(f"Received response from {self.model} (length: {len(text_content)} chars)")
+            
+            try:
+                parsed_response = self.parse_response(text_content)
+                logger.debug(f"Parsed response (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse assistant response: {parse_error}")
+                if attempt >= max_attempts:
+                    raise
+                
+                correction_prompt = (
+                    "Your previous response did not follow the required format. "
+                    "Always respond with either (a) a tool call, or (b) a JSON object describing the next action."
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": [{"type": "text", "text": correction_prompt}]
+                })
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+
+    def add_tool_message(self, tool_call_id: str, content: str) -> None:
+        """Append tool call results to the conversation history."""
+        if not tool_call_id:
+            return
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            content = str(content)
+            
+        tool_message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": content
+                }
+            ]
+        }
+        self.messages.append(tool_message)
+        logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
+
+    def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove images from a message."""
+        content = message.get("content", "")
+        if isinstance(content, list):
+            # Filter out image items
+            new_content = [
+                item for item in content
+                if not (isinstance(item, dict) and item.get("type") == "image")
+            ]
+            message["content"] = new_content
+        return message
+
+    def _cleanup_old_user_message_images(self) -> None:
+        """Remove images from old user messages (except the latest user turn).
+
+        When ``cleanup_old_user_images`` is False, historical images are kept
+        in ``self.messages`` and sent on every API call.
+        """
+        if not getattr(self, "cleanup_old_user_images", True):
+            logger.debug("ClaudeLLM: keeping images in all user messages (cleanup disabled)")
+            return
+
+        # Find the last user message
+        last_user_msg_idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                last_user_msg_idx = i
+                break
+
+        if last_user_msg_idx is not None:
+            for i in range(len(self.messages)):
+                if i != last_user_msg_idx and self.messages[i].get("role") == "user":
+                    self.messages[i] = self._remove_images_from_message(self.messages[i])
+
+
+    def get_history(self) -> List[Dict[str, Any]]:
+        """Get the message history in OpenAI-compatible format."""
+        history = []
+        for msg in self.messages:
+            new_msg = msg.copy()
+            content = msg.get("content")
+            
+            if isinstance(content, list):
+                # Handle list content (Claude format)
+                text_parts = []
+                tool_calls = []
+                has_only_tool_results = True
+                
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                            has_only_tool_results = False
+                        elif item.get("type") == "tool_use":
+                            # Convert tool_use to OpenAI tool_call
+                            tool_calls.append({
+                                "id": item.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": item.get("name"),
+                                    "arguments": json.dumps(item.get("input"))
+                                }
+                            })
+                            has_only_tool_results = False
+                
+                if has_only_tool_results:
+                    continue
+
+                new_msg["content"] = "".join(text_parts)
+                if tool_calls:
+                    new_msg["tool_calls"] = tool_calls
+            
+            history.append(new_msg)
+        return history
+
+
+class GeminiLLM(BaseLLM):
+    """Language model client using Google Gemini API."""
+
+    def __init__(self, llm_config: Dict[str, Any] | None = None, client_type: str = "shell", **kwargs):
+        if not GEMINI_AVAILABLE:
+            raise ImportError("Google Gemini libraries not available. Install with: pip install google-genai")
+        
+        # Initialize base class first
+        super().__init__(llm_config, client_type, **kwargs)
+        
+        if llm_config is None:
+            llm_config = {}
+
+        # Extract model and api_key from llm_config, with fallback to kwargs and env variables
+        self.model = llm_config.get("model", kwargs.get("model", "gemini-3-flash-preview"))
+        api_key = (
+            llm_config.get("api_key") or
+            kwargs.get("api_key") or
+            os.getenv("GEMINI_API_KEY") or
+            os.getenv("GOOGLE_API_KEY")
+        )
+        
+        if not api_key:
+            raise ValueError("Gemini API key not found. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable, or provide in config.")
+
+        # Initialize Gemini client
+        # Check if we need v1alpha API version (for media_resolution support)
+        use_v1alpha = llm_config.get("use_v1alpha", False)
+        if use_v1alpha:
+            self.client = genai.Client(api_key=api_key, http_options={'api_version': 'v1alpha'})
+        else:
+            self.client = genai.Client(api_key=api_key)
+
+        self.cleanup_old_user_images: bool = bool(
+            llm_config.get("cleanup_old_user_images", kwargs.get("cleanup_old_user_images", False))
+        )
+
+        # Thinking configuration
+        self.thinking = llm_config.get("thinking", kwargs.get("thinking", False))
+
+        logger.info(f"GeminiLLM initialized with model: {self.model}")
+        logger.info(
+            "GeminiLLM cleanup_old_user_images=%s (false keeps historical images)",
+            self.cleanup_old_user_images,
+        )
+        logger.debug(f"API key configured: {bool(api_key)}")
+        logger.debug(f"Client type: {self.client_type}")
+        logger.debug(f"Tool calling mode: {self.use_tools}")
+
+    def _sanitize_gemini_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize parameters for Gemini API (e.g. remove non-string enums)."""
+        if not parameters:
+            return parameters
+            
+        new_params = parameters.copy()
+        
+        # Handle properties if present
+        if "properties" in new_params:
+            new_props = {}
+            for name, prop in new_params["properties"].items():
+                new_props[name] = self._sanitize_gemini_parameters(prop)
+            new_params["properties"] = new_props
+            
+        # Handle enum validation
+        if "enum" in new_params:
+            # Check if any enum value is not a string
+            if any(not isinstance(v, str) for v in new_params["enum"]):
+                # Gemini only supports string enums in its Pydantic models
+                # So we remove the enum constraint for non-string types
+                # and add the options to description
+                options_str = ", ".join(map(str, new_params["enum"]))
+                if "description" in new_params:
+                    new_params["description"] += f" (Options: {options_str})"
+                else:
+                    new_params["description"] = f"Options: {options_str}"
+                del new_params["enum"]
+                
+        return new_params
+
+    def _convert_openai_tools_to_gemini(self, openai_tools: List[Dict[str, Any]]) -> List[types.Tool]:
+        """Convert OpenAI tool format to Gemini tool format.
+        
+        Args:
+            openai_tools: List of tools in OpenAI format
+            
+        Returns:
+            List of Gemini Tool objects
+        """
+        gemini_tools = []
+        for tool in openai_tools:
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+                
+                # Sanitize parameters
+                parameters = func.get("parameters", {})
+                sanitized_parameters = self._sanitize_gemini_parameters(parameters)
+                
+                gemini_function = {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": sanitized_parameters
+                }
+                gemini_tools.append(types.Tool(function_declarations=[gemini_function]))
+        return gemini_tools
+
+    def _convert_openai_messages_to_gemini_contents(self, messages: List[Dict[str, Any]]) -> List[types.Content]:
+        """Convert OpenAI message format to Gemini contents format.
+        
+        Args:
+            messages: List of messages in OpenAI format
+            
+        Returns:
+            List of Gemini Content objects
+        """
+        contents = []
+        current_role = None
+        current_parts = []
+        
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content", "")
+            
+            # Handle tool messages (skip for now, Gemini handles tool results differently)
+            if role == "tool":
+                continue
+            
+            # Handle assistant messages with tool_calls
+            if role == "assistant" and "tool_calls" in message:
+                # For assistant messages with tool calls, we need to add the function call parts
+                if current_parts:
+                    contents.append(types.Content(role=current_role, parts=current_parts))
+                    current_parts = []
+                
+                # Add text content if present
+                if content:
+                    current_parts.append(types.Part(text=content))
+                
+                # Add function call parts
+                for tool_call in message.get("tool_calls", []):
+                    func = tool_call.get("function", {})
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    
+                    current_parts.append(types.Part(
+                        function_call=types.FunctionCall(
+                            name=func.get("name", ""),
+                            args=args
+                        )
+                    ))
+                
+                if current_parts:
+                    contents.append(types.Content(role="model", parts=current_parts))
+                    current_parts = []
+                continue
+            
+            # Map OpenAI roles to Gemini roles
+            gemini_role = "user" if role == "user" else "model"
+            
+            # If role changed, save previous content
+            if current_role is not None and current_role != gemini_role and current_parts:
+                contents.append(types.Content(role=current_role, parts=current_parts))
+                current_parts = []
+            
+            current_role = gemini_role
+            
+            # Handle content (can be string or list for multimodal)
+            if isinstance(content, str):
+                if content:
+                    current_parts.append(types.Part(text=content))
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            current_parts.append(types.Part(text=item.get("text", "")))
+                        elif item.get("type") == "image_url":
+                            # Extract base64 data from data URL
+                            image_url = item.get("image_url", {}).get("url", "")
+                            if image_url.startswith("data:image"):
+                                # Format: data:image/png;base64,<base64_data>
+                                base64_data = image_url.split(",", 1)[1] if "," in image_url else ""
+                                if base64_data:
+                                    try:
+                                        image_data = base64.b64decode(base64_data)
+                                        mime_type = "image/png"  # Default
+                                        if "image/jpeg" in image_url or "image/jpg" in image_url:
+                                            mime_type = "image/jpeg"
+                                        elif "image/gif" in image_url:
+                                            mime_type = "image/gif"
+                                        elif "image/webp" in image_url:
+                                            mime_type = "image/webp"
+                                        
+                                        current_parts.append(types.Part(
+                                            inline_data=types.Blob(
+                                                mime_type=mime_type,
+                                                data=image_data
+                                            )
+                                        ))
+                                    except Exception as e:
+                                        logger.warning(f"Failed to decode image: {e}")
+        
+        # Add remaining content
+        if current_parts:
+            contents.append(types.Content(role=current_role, parts=current_parts))
+        
+        return contents
+
+    def _make_api_call(self) -> Any:
+        """Make Gemini API call."""
+        # Convert messages to Gemini contents format
+        contents = self._convert_openai_messages_to_gemini_contents(self.messages)
+
+        # Prepare API call parameters
+        api_params = {
+            "model": self.model,
+            "contents": contents
+        }
+
+        # Build GenerateContentConfig
+        config_kwargs = {}
+
+        # System prompt — Gemini carries it on the config, not as a "system"
+        # role message inside ``contents``.
+        if self.system_prompt:
+            config_kwargs["system_instruction"] = self.system_prompt
+
+        # Add tools if in tool calling mode
+        if self.use_tools and self.tools:
+            gemini_tools = self._convert_openai_tools_to_gemini(self.tools)
+            if gemini_tools:
+                config_kwargs["tools"] = gemini_tools
+
+        # Add thinking config if enabled
+        if self.thinking:
+            config_kwargs["thinking_config"] = types.ThinkingConfig()
+
+        if config_kwargs:
+            api_params["config"] = types.GenerateContentConfig(**config_kwargs)
+
+        response = self.client.models.generate_content(**api_params)
+        self.api_calls += 1
+        return response
+    
+    def _handle_api_response(self, response: Any, attempt: int, max_attempts: int) -> Dict[str, Any]:
+        """Handle Gemini API response."""
+        # Extract response content
+        if not response.candidates:
+            raise ValueError("No candidates in Gemini response")
+        
+        candidate = response.candidates[0]
+        if not candidate.content or not candidate.content.parts:
+            raise ValueError("No content parts in Gemini response")
+
+        cost_info = CostTracker.track_gemini(response, self.model)
+        if cost_info:
+            cost = float(cost_info["total_cost_usd"])
+            tokens = cost_info["tokens"]
+            breakdown = cost_info["cost_breakdown_usd"]
+
+            self.total_cost += cost
+            self.total_input_tokens += tokens["prompt_token_count"]
+            self.total_uncached_input_tokens += tokens["uncached_input_tokens"]
+            self.total_output_tokens += tokens["candidates_token_count"]
+            self.total_cached_tokens += tokens["cached_content_token_count"]
+
+            self.total_cost_input_uncached_usd += float(breakdown["input_uncached_usd"])
+            self.total_cost_input_cached_usd += float(breakdown["input_cached_usd"])
+            self.total_cost_output_usd += float(breakdown["output_usd"])
+
+            self.per_call_costs.append(cost_info)
+            logger.info(
+                f"API call #{self.api_calls} cost: ${cost:.6f} ({cost_info.get('pricing_tier','')}) | "
+                f"in={tokens['prompt_token_count']} cached={tokens['cached_content_token_count']} "
+                f"out={tokens['candidates_token_count']} | Running total: ${self.total_cost:.6f}"
+            )
+        
+        # Check for function calls
+        function_calls = []
+        text_content = ""
+        think_content = ""
+
+        for part in candidate.content.parts:
+            # Capture thinking parts separately
+            if hasattr(part, 'thought') and part.thought and hasattr(part, 'text') and part.text:
+                think_content += part.text
+                continue
+            if hasattr(part, 'function_call') and part.function_call:
+                # Extract function call name and args
+                func_call = part.function_call
+                func_name = func_call.name if hasattr(func_call, 'name') else ""
+                # Args might be a dict or already serialized, handle both cases
+                if hasattr(func_call, 'args'):
+                    func_args = func_call.args
+                    if isinstance(func_args, dict):
+                        func_args_str = json.dumps(func_args)
+                    else:
+                        func_args_str = str(func_args)
+                else:
+                    func_args_str = "{}"
+                
+                function_calls.append({
+                    "id": f"call_{len(function_calls)}",
+                    "function": {
+                        "name": func_name,
+                        "arguments": func_args_str
+                    }
+                })
+            elif hasattr(part, 'text') and part.text:
+                text_content += part.text
+        
+        # Save think content for visualization
+        self.last_think = think_content if think_content else (text_content if text_content else None)
+        
+        # Handle tool calling response
+        if function_calls:
+            # Convert to OpenAI-style tool_calls format for parsing
+            tool_calls_list = []
+            for fc in function_calls:
+                tool_calls_list.append({
+                    "id": fc.get("id"),
+                    "function": {
+                        "name": fc["function"]["name"],
+                        "arguments": fc["function"]["arguments"]
+                    }
+                })
+            
+            # Add assistant message with tool calls
+            assistant_message = {"role": "assistant", "content": text_content, "tool_calls": tool_calls_list}
+            self.messages.append(assistant_message)
+            
+            logger.debug(f"Received {len(function_calls)} function calls from {self.model}")
+            
+            try:
+                parsed_response = self.parse_tool_calls(tool_calls_list)
+                logger.debug(f"Parsed tool calls (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse tool calls (attempt {attempt}/{max_attempts}): {parse_error}")
+                if attempt >= max_attempts:
+                    return {
+                        "action_type": "error",
+                        "error_message": str(parse_error),
+                        "tool_calls": tool_calls_list
+                    }
+                error_message = (
+                    f"Error parsing tool calls: {str(parse_error)}\n"
+                    f"Please check the tool parameters and try again. "
+                    f"Make sure you only use the parameters documented for each tool."
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": error_message
+                })
+                # Retry by making another API call
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+        else:
+            # Regular text response
+            assistant_message = {"role": "assistant", "content": text_content}
+            self.messages.append(assistant_message)
+
+            logger.debug(f"Received response from {self.model} (length: {len(text_content)} chars)")
+
+            try:
+                parsed_response = self.parse_response(text_content)
+                logger.debug(f"Parsed response (ACTION): \n{colorize(json.dumps(parsed_response, indent=2), 'YELLOW')}")
+                return parsed_response
+            except ValueError as parse_error:
+                logger.warning(f"Failed to parse assistant response (attempt {attempt}/{max_attempts}): {parse_error}")
+                if attempt >= max_attempts:
+                    raise
+                correction_prompt = (
+                    "Your previous response did not follow the required format. "
+                    "Always respond with either (a) a tool call, or (b) a JSON object describing the next action "
+                    "following this schema:\n"
+                    "{\n"
+                    '  "action_type": "<one of: computer_use_*, file_*, code_execute, shell_execute, task_complete>",\n'
+                    '  "param_name": "param_value", ...\n'
+                    "}\n"
+                    "Do not nest parameters in a 'parameters' field. Put all parameters at the top level.\n"
+                    "Do not include natural language outside the JSON object."
+                )
+                self.messages.append({
+                    "role": "user",
+                    "content": correction_prompt
+                })
+                # Retry by making another API call
+                return self._handle_api_response(self._make_api_call(), attempt + 1, max_attempts)
+    
+    def parse_tool_calls(self, tool_calls) -> Dict[str, Any]:
+        """Parse tool calls from Gemini API response into action format.
+        
+        Args:
+            tool_calls: List of tool calls from Gemini API
+            
+        Returns:
+            Dictionary with actions list or single action
+        """
+        # Convert Gemini tool_calls to our internal format
+        tool_calls_list = []
+        for tc in tool_calls:
+            tool_calls_list.append({
+                "id": tc.get("id"),
+                "function": {
+                    "name": tc["function"]["name"],
+                    "arguments": tc["function"]["arguments"]
+                }
+            })
+        
+        return self.parse_tool_calls_list(tool_calls_list)
+
+    def get_history(self) -> List[Dict[str, str]]:
+        """Get the message history."""
+        return self.messages
+
+    def clear_history(self) -> None:
+        """Clear the message history."""
+        logger.debug(f"Clearing message history ({len(self.messages)} messages removed)")
+        self.messages = []
+
+    def add_tool_message(self, tool_call_id: str, content: str) -> None:
+        """Append tool call results to the conversation history for Gemini tool-calling compliance."""
+        if not tool_call_id:
+            return
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            content = str(content)
+        
+        # For Gemini, we need to add function response as a part
+        # Find the corresponding function call and add result
+        # This is a simplified implementation - Gemini may handle this differently
+        tool_message = {
+            "role": "model",
+            "content": f"Tool call {tool_call_id} result: {content}"
+        }
+        self.messages.append(tool_message)
+        logger.debug(f"Added tool message for {tool_call_id}: {content[:200]}")
+
+    def _remove_images_from_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove images from a message, keeping only text content.
+        
+        Args:
+            message: Message dictionary with 'role' and 'content' keys
+            
+        Returns:
+            Modified message dictionary with images removed
+        """
+        content = message.get("content", "")
+        if isinstance(content, list):
+            # Filter out image items, keep only text
+            text_items = [
+                item for item in content
+                if not (isinstance(item, dict) and item.get("type") == "image_url")
+            ]
+            # If only one text item remains, extract just the text string
+            if len(text_items) == 1 and isinstance(text_items[0], dict) and text_items[0].get("type") == "text":
+                message["content"] = text_items[0].get("text", "")
+            else:
+                message["content"] = text_items
+        return message
+
+    def _cleanup_old_user_message_images(self) -> None:
+        """Remove images from old user messages, keeping only the most recent user message's images.
+        
+        This prevents image accumulation across iterations. Only the current iteration's images
+        should be included in the API call.
+        """
+        if not getattr(self, "cleanup_old_user_images", True):
+            logger.debug("GeminiLLM: keeping images in all user messages (cleanup disabled)")
+            return
+
+        # Find the last user message (should be the one we just added)
+        last_user_msg_idx = None
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                last_user_msg_idx = i
+                break
+        
+        # Remove images from all user messages except the last one
+        if last_user_msg_idx is not None:
+            for i in range(len(self.messages)):
+                if i != last_user_msg_idx and self.messages[i].get("role") == "user":
+                    old_content = self.messages[i].get("content", "")
+                    if isinstance(old_content, list):
+                        # Check if it has images
+                        has_images = any(isinstance(item, dict) and item.get("type") == "image_url"
+                                        for item in old_content)
+                        if has_images:
+                            # Remove images, keep only text
+                            self.messages[i] = self._remove_images_from_message(self.messages[i])
+                            logger.debug(f"Removed images from old user message at index {i}")
+
+
+class DeepSeekLLM(BaseLLM):
+    pass
+
+
+class Human(Controller):
+    """Human controller that prompts user for manual input."""
+
+    def __init__(self):
+        """Initialize the Human controller."""
+        logger.info("Human controller initialized")
+
+    def call(self, prompt: str, message_history: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+        """Prompt user for manual input given a prompt.
+
+        Args:
+            prompt: The prompt to display to the user
+            message_history: Ignored for Human controller
+
+        Returns:
+            Dictionary with command and explanation
+        """
+        logger.debug(f"Prompting user with: {prompt[:100]}...")
+        print("\n" + "=" * 80)
+        print("PROMPT:")
+        print("=" * 80)
+        print(prompt)
+        print("=" * 80)
+        print("Please provide your response below:")
+        print("=" * 80)
+
+        user_input = input("> ").strip()
+        logger.debug(f"User provided input: {user_input[:100]}...")
+
+        # Parse and return the structured response
+        parsed_response = self.parse_response(user_input)
+        return parsed_response
+
+    def clear_history(self) -> None:
+        """Human controller doesn't maintain history."""
+        logger.debug("Human controller has no history to clear")
+
+    def build_prompt(self, task_description: str = None, feedback: str = None) -> str:
+        """Build a prompt for the human user.
+
+        Args:
+            task_description: The task description
+            feedback: Feedback from previous iteration
+
+        Returns:
+            A formatted prompt string
+        """
+        if task_description is not None:
+            prompt = f"Task: {task_description}\n\nPlease provide a shell command to solve this task."
+            logger.debug(f"Built initial prompt for task: {prompt}")
+            return prompt
+        if feedback is not None:
+            prompt = f"Feedback: {feedback}\n\nPlease provide the next shell command."
+            logger.debug(f"Built feedback prompt: {prompt}")
+            return prompt
+        raise ValueError("No task description or feedback provided")
+
+    def parse_response(self, response: str) -> Dict[str, Any]:
+        """Parse user's response as a simple shell command.
+
+        Args:
+            response: The user's input response (plain shell command)
+
+        Returns:
+            Dictionary with command and explanation
+        """
+        command = response.strip()
+        logger.debug(f"Parsed user command: {command[:100]}...")
+        return {"command": command, "explanation": "User provided command"}

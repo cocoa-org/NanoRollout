@@ -1,0 +1,14 @@
+instruction: |
+  I now need to identify the relationship between two scholars. Please complete the following tasks:
+
+  - I will provide you with the Google Scholar pages of two scholars (temporarily referred to as A and B). Please help me find the connections between the owners of these two Google Scholar profiles.
+
+  - The connection you need to find should be a relationship chain, such as A–C–D–B, where C and D are intermediate contacts between A and B, and each pair of adjacent people has collaborated on academic papers. (The actual number of people between A and B is unknown.)
+
+  - Please return the shortest relationship chains between A and B and save them in a Markdown (.md) file.
+
+  - Save the results into `/tmp_workspace/results/results.md`.
+
+  A’s Google Scholar: https://scholar.google.com/citations?user=hUrX-LMAAAAJ&hl=en
+
+  B’s Google Scholar: https://scholar.google.com/citations?user=JicYPdAAAAAJ&hl=en

@@ -1,0 +1,8 @@
+instruction: |
+  请为 Meta 的开源项目 SAM 3: Segment Anything with Concepts（https://github.com/facebookresearch/sam3/）制作一份 8 页的项目介绍演示文稿。
+
+  输出文件为 `/tmp_workspace/results/output.pdf`，要求：
+  - 恰好 8 页
+  - 设计风格统一且专业
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

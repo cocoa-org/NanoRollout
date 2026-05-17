@@ -1,0 +1,38 @@
+instruction: |
+  任务：使用 VLMEvalKit 评测模型在 OCRBench 上的表现
+
+  【评测目标】
+  待评测模型：gpt-5-mini-2025-08-07（OpenAI API 模型）
+  评测基准：OCRBench（原始版本v1，注意不是 OCRBenchV2）
+
+  【可复现性要求】
+  尽可能保证评测结果可复现，比如温度设置等，具体看框架实现，参考框架某些设置可以加速评测
+
+  【输出要求】
+  输出文件路径：/tmp_workspace/results/result.json
+  输出格式：见下方 JSON 格式规范
+
+  result.json 格式规范：
+  ```json
+  {
+    "model": "gpt-5-mini-2025-08-07",
+    "benchmark": "OCRBench",
+    "Final Score": <int>,
+    "Text Recognition": <int>,
+    "Scene Text-centric VQA": <int>,
+    "Document-oriented VQA": <int>,
+    "Key Information Extraction": <int>,
+    "Handwritten Mathematical Expression Recognition": <int>
+  }
+  ```
+
+  【相关资源】
+  1. OpenRouter接口
+     - base_url: 从环境变量 `OPENROUTER_BASE_URL` 中获取
+     - API Key: 从环境变量 `OPENROUTER_API_KEY` 中获取
+  2. OCRBench 数据文件
+     - 如果评测过程中需要用到 OCRBench 的 TSV 数据文件，可以直接使用 `/tmp_workspace/OCRBench.tsv`，无需另外下载
+
+  【提示和注意事项】
+  1. 我希望用尽可能少的时间得到结果，加速下评测
+  2. python环境：请使用当前环境中的 `eval` 这个 conda 环境(位置在`/root/miniconda3/envs/eval`)，里面已经预装了一些常用的 python 包，但不保证完全满足 VLMEvalKit 的所有依赖要求，缺少的包请自行在这个环境里安装

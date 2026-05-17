@@ -1,0 +1,11 @@
+instruction: |
+  `/tmp_workspace/clothing_photos/` 目录中有 12 张服饰单品平铺图（`item_01.jpg` 至 `item_12.jpg`），包含上衣、下装和鞋子。
+
+  请完成以下工作：
+
+  1. 判断每件单品的类别与特征。
+  2. 将 12 件单品分成 4 套完整穿搭，每套包含 1 件上衣、1 件下装、1 双鞋，不遗漏不重复。
+  3. 将分类与搭配结果保存到 `/tmp_workspace/results/outfits.json`（每套含 `outfit_id`、`style`、`gender`（female/male）、`top`/`bottom`/`shoes` 各含 `original_file`、`category`、`description`（中文））。`category` 必须使用以下标准分类名称之一：`上衣`、`裤子`、`裙子`、`鞋子`。
+  4. 为每套搭配生成全身模特展示图，保存为 `/tmp_workspace/results/model_outfit_1.png` 至 `/tmp_workspace/results/model_outfit_4.png`。
+
+  如果需要图像理解或多模态生成能力，可以调用 OpenRouter API（base_url 通过环境变量 `OPENROUTER_BASE_URL` 获取，API Key 通过环境变量 `OPENROUTER_API_KEY` 获取）。

@@ -1,0 +1,10 @@
+# Task input data (exec/) and ground truth (gt/) live on HuggingFace
+# (internlm/WildClawBench, workspace/). Fetch them with:
+#
+#   bash nanorollout/envs/uda_env/adapter/wildclaw-v1/_fetch_assets.sh
+#
+# See README.md for details. We keep only task SCHEMA in git: meta.json,
+# task.yaml, grade.py, env.tsv, warmup.sh, Dockerfile, docker-compose.yaml,
+# and skills/ (which is small + benchmark-defined).
+*/exec/
+*/gt/

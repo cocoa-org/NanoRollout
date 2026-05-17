@@ -1,0 +1,2 @@
+instruction: |
+  I want to push the updated content under /tmp_workspace/mm_agents/* to the remote mm_agents repository. Please implement it.

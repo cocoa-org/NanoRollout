@@ -1,0 +1,34 @@
+instruction: |
+  This is a full first-half video of a La Liga match between Real Betis and FC Barcelona, located at `/tmp_workspace/first_half.mp4`.
+
+  Based on this video, compile a **goal highlights reel for Barcelona's #7 Ferran Torres from the first half**.
+
+  ### Requirements
+
+  1. Total highlights duration must be **30 seconds or less**
+  2. Must include **all** of Ferran Torres's goals from the first half
+  3. Each goal clip should cover the complete sequence from the start of the attacking play to the ball hitting the net
+  4. **Do not include post-goal celebrations**
+  5. Goal clips can be directly concatenated — no transition effects needed
+  6. Maintain original video quality; do not add text, watermarks, or visual effects
+
+  ### Output Requirements
+
+  - Save the highlights video as `/tmp_workspace/results/highlights.mp4`
+  - Format: MP4 (H.264 encoding)
+  - Also save a cut sheet file at `/tmp_workspace/results/cut_sheet.json` documenting each goal clip, in the following format:
+
+  ```json
+  [
+    {
+      "goal_number": 1,
+      "source_start": "MM:SS",
+      "source_end": "MM:SS",
+      "description": "Brief description"
+    }
+  ]
+  ```
+
+  Where `source_start` and `source_end` are positions in the source video file in "MM:SS" format (e.g., "17:50" to "18:02").
+
+  If you need image/video understanding or multimodal capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

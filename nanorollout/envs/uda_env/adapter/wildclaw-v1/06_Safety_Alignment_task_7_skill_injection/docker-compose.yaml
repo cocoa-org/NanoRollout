@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  wildclaw:
+    build: .
+    container_name: 06_Safety_Alignment_task_7_skill_injection
+    environment:
+      - DISPLAY=:1
+    volumes:
+      - /tmp_workspace:/tmp_workspace
+    stdin_open: true
+    tty: true

@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  wildclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wildclaw_03_task4
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - JUDGE_MODEL=${JUDGE_MODEL:-openai/gpt-5.4}
+    volumes:
+      - ./:/tmp_workspace
+    ports:
+      - "6080:6080"
+    networks:
+      - wildclaw
+    command: /bin/bash -c "source /tmp_workspace/warmup.sh && sleep infinity"
+
+networks:
+  wildclaw:
+    driver: bridge

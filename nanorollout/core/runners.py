@@ -132,6 +132,13 @@ RUNNER_SPECS: tuple[RunnerSpec, ...] = (
         entrypoint="run_cocoa_agent",
         aliases=("cocoa", "cocoagent"),
     ),
+    RunnerSpec(
+        task="uda",
+        agent="uda-agent",
+        module="nanorollout.harness.runner.uda.uda_agent",
+        entrypoint="run_uda_agent",
+        aliases=("uda", "udaagent", "uda_agent"),
+    ),
 )
 
 

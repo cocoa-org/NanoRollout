@@ -1,0 +1,78 @@
+instruction: |
+  I'm a CV researcher and the author of **CapRL**.
+
+  Please prepare my daily arxiv paper digest:
+
+  1. Fetch cs.CV papers submitted on 2026-02-25 from the arxiv.
+
+  2. From all fetched papers, classify every paper into exactly one of the following categories and group them accordingly. Papers that don't fit the first five topic categories must be placed under "Others". In the Classification section, only list paper titles (you may include arXiv IDs). No per-paper explanation or summary is needed.
+     - Multimodal / Vision-Language Models
+     - Medical Image Analysis
+     - Image / Video Generation & Editing
+     - Autonomous Driving / Robotics / Embodied AI
+     - 3D Vision / Reconstruction / Gaussian Splatting
+     - Others
+
+  3. For the papers classified under "Multimodal / Vision-Language Models", build a metadata audit table:
+     - arXiv ID
+     - all authors
+     - whether the paper has an appendix / supplementary section
+     - number of main-paper figures
+     - number of appendix figures
+     - number of main-paper tables
+     - number of appendix tables
+     - total number of figures, including appendix figures
+     - total number of tables, including appendix tables
+     - appendix evidence: if the paper has an appendix, give the first appendix / supplementary heading you used as the boundary; otherwise write `None`
+
+     Count figures/tables from the paper content rather than from abstract-page metadata. If you use arXiv HTML, count top-level paper figures/tables instead of subfigure markers such as "(a)" and "(b)". The `Authors` field must cover the complete author list, not a partial subset. The total counts must equal `main + appendix`.
+
+  4. Based on my research interests, highlight papers I might find interesting.
+
+  5. If any paper benchmarks against CapRL, extract the comparison results.
+
+  Save everything to `/tmp_workspace/results/arxiv_digest.md` using exactly the following structure (do not rename these section headings):
+
+  ```markdown
+  # ArXiv Daily Digest - 2026-02-25
+
+  ### Classification
+  #### Multimodal / Vision-Language Models
+  - **Paper Title** (arXiv ID)
+
+  #### Medical Image Analysis
+  - ...
+
+  #### Image / Video Generation & Editing
+  - ...
+
+  #### Autonomous Driving / Robotics / Embodied AI
+  - ...
+
+  #### 3D Vision / Reconstruction / Gaussian Splatting
+  - ...
+
+  #### Others
+  - ...
+
+  ### Multimodal Paper Metadata Audit
+  For papers in the "Multimodal / Vision-Language Models" category, report the full author list, whether the paper has an appendix, split figure/table counts between main paper and appendix, the totals, and appendix evidence:
+
+  | Paper | arXiv ID | Authors | Has Appendix | Main Figures | Appendix Figures | Main Tables | Appendix Tables | Total Figures | Total Tables | Appendix Evidence |
+  |------|----------|---------|--------------|--------------|------------------|-------------|-----------------|---------------|--------------|-------------------|
+  | ... | ... | ... | Yes / No | ... | ... | ... | ... | ... | ... | ... |
+
+  ### Personalized Recommendations
+  #### Papers of Interest
+  Select exactly 1 paper most relevant to my research interests, with a brief reason.
+  - **Paper Title** — why it's relevant
+
+  #### Benchmark Comparison
+  If any paper compares against CapRL, extract the **Prism evaluation** main table in markdown table format, focusing on CapRL and the paper's proposed method:
+
+  | MLLM | Benchmark1 | Benchmark2 | ... | Avg. |
+  |------|------------|------------|-----|------|
+  | CapRL-3B | ... | ... | ... | <avg> |
+  | [proposed method] | ... | ... | ... | <avg> |
+  | ... |
+  ```

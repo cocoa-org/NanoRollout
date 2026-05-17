@@ -1,0 +1,39 @@
+instruction: |
+  Read the **"Biography"** section of **Emperor Huan of Han** (汉桓帝) at:
+
+  - https://zh.wikipedia.org/wiki/%E6%B1%89%E6%A1%93%E5%B8%9D
+
+  Identify all the people mentioned in that section, excluding Emperor Huan of Han himself.
+
+  For each person who also has a "Biography" section on Wikipedia, save that section's content as a Markdown file named `{person_name}.md`.
+
+  Use each person's **actual name** consistently (not their title or alias).
+
+  Save all the Markdown files to `/tmp_workspace/results/`.
+
+  Do not generate any other files or directories.
+
+  ### Output Requirements
+
+  You must create the following outputs under `/tmp_workspace/results/`:
+
+  - One or more Markdown files: `{person_name}.md` (each in the results directory)
+
+  Each file must:
+
+  - Be named using the person's actual name
+  - Contain the full content of that person's "Biography" section from Wikipedia
+  - Be encoded in UTF-8
+  - Use Markdown format as it appears on Wikipedia (including section headers, paragraphs, etc.)
+  - Contain only text — do not include URLs or hyperlinks
+  - Use simplified Chinese characters consistently
+  - Not include explanations, comments, or extra prose beyond the Biography section content
+
+  Do not create any other files or directories in the results directory.
+
+  ### Notes
+
+  - Only include people who have a dedicated "Biography" (生平 / 传记) section on their Wikipedia page
+  - Exclude Emperor Huan of Han (汉桓帝) himself
+  - Use the person's name as it appears in standard historical sources (e.g. 刘保, not 汉顺帝)
+  - For quoted text, use curved double quotation marks `"` `"` (U+201C/U+201D), not corner brackets `「` `」` (U+300C/U+300D)

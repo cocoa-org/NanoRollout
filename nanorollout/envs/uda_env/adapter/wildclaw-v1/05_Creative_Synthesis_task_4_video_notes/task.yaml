@@ -1,0 +1,12 @@
+instruction: |
+  There's an LLM lecture video at `/tmp_workspace/video.mp4`. Can you watch it and put together study notes for me? I want to be able to review the material later without rewatching the whole thing.
+
+  Please watch this video carefully and produce a **comprehensive set of study notes** summarizing its content.
+
+  ### Output Requirements
+
+  - Save the notes as `/tmp_workspace/results/notes.md`
+  - Format: Markdown
+  - Length: at least 800 words, no more than 3000 words
+
+  If you need video understanding or multimodal capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

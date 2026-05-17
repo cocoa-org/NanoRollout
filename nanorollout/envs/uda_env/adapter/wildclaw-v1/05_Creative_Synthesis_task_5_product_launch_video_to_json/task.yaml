@@ -1,0 +1,12 @@
+instruction: |
+  You have a product launch event video at `/tmp_workspace/recording.mp4`.
+
+  **No internet access — all information must come solely from the video.**
+
+  Watch the video, identify all hardware products announced, and save structured data to `/tmp_workspace/results/products.json`. The file should contain a `products` array where each entry has: `product_name` (string), `category` ("smartphone" | "smartwatch" | "earbuds"), `chip` (string | null), `colors` (string array | null), `battery_life_hours` (int or int array | null), `starting_price_usd` (int | null). Use `null` for any value not explicitly shown in the video. Use exact English color names as shown.
+
+  Also create a visually polished 5-page A4 promotional PDF at `/tmp_workspace/results/promotional_post.pdf`, featuring product images extracted from the video and key highlights.
+
+  Only include hardware products (no software/service announcements).
+
+  If you need video understanding or multimodal capabilities, you can call the OpenRouter API (base_url available via the `OPENROUTER_BASE_URL` environment variable, API key available via the `OPENROUTER_API_KEY` environment variable).

@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  wildclaw-task:
+    build: .
+    container_name: wildclaw-03-task6
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL}
+      JUDGE_MODEL: ${JUDGE_MODEL:-openai/gpt-5.4}
+    volumes:
+      - ./results:/tmp_workspace/results
+      - ./mock_services:/tmp_workspace/mock_services
+      - ./tmp:/tmp_workspace/tmp
+    ports:
+      - "9110:9110"
+      - "9103:9103"
+    working_dir: /tmp_workspace
