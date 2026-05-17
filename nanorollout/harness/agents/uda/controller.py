@@ -1007,10 +1007,21 @@ class BaseLLM(Controller):
         # a single user message.
         self.system_prompt: str = ""
 
-        # Context-management knobs. Both default to "on" with values matching
-        # anthropic-quickstarts/computer-use-best-practices.
+        # Context-management knobs.
+        #
+        # ``history_window`` (sliding-window compaction over iteration blocks)
+        # defaults to **0 = OFF** — for RL training we don't want to drop
+        # middle iterations entirely, because the policy conditions on the
+        # full action history. Set >0 only when context length actually
+        # threatens to blow up (long agentic rollouts >50 iters).
+        #
+        # ``image_prune_*`` (StripImagesAtIntervals) defaults to ON with the
+        # best-practices interval scheme — this only swaps image bytes for an
+        # ``[Image Omitted]`` placeholder, so the *fact* of past observations
+        # is preserved while the prefix stays byte-stable for SGLang prefix
+        # cache.
         self.history_window: int = int(
-            llm_config.get("history_window", kwargs.get("history_window", 8))
+            llm_config.get("history_window", kwargs.get("history_window", 0))
         )
         self.image_prune_min: int = int(
             llm_config.get("image_prune_min", kwargs.get("image_prune_min", 3))
